@@ -9,6 +9,7 @@ Date: 2025
 """
 
 import maya.cmds as cmds
+import sys
 from PySide2 import QtWidgets, QtCore, QtGui
 import maya.OpenMayaUI as omui
 import shiboken2
@@ -347,28 +348,19 @@ class ModularRigUI(QtWidgets.QDialog):
             QtWidgets.QMessageBox.information(self, "Success", "Rig built successfully!")
 
 def show_ui():
-    """Show the UI, handling proper cleanup of previous instances."""
-    global dialog
-
-    # Clean up old UI if it exists
-    try:
-        # Check if dialog exists and is valid
-        if 'dialog' in globals() and dialog is not None:
-            # Check if the widget still exists in Maya
-            if dialog.isVisible():
-                dialog.close()
-
-            # Explicitly delete to ensure cleanup
-            dialog.deleteLater()
-    except Exception:
-        # If any error occurs (like the UI was already destroyed), just continue
-        pass
+    """Show the UI, ensuring only one instance exists."""
+    # Check if window already exists and delete it
+    window_name = "ModularRigUI"
+    if cmds.window(window_name, exists=True):
+        cmds.deleteUI(window_name)
 
     # Create and show new dialog
     dialog = ModularRigUI()
+    dialog.setObjectName(window_name)
+    dialog.setWindowFlags(dialog.windowFlags() | QtCore.Qt.Window)
+    dialog.setWindowTitle("Modular Auto-Rig")
     dialog.show()
 
-    # Return dialog to keep reference alive
     return dialog
 
 if __name__ == "__main__":

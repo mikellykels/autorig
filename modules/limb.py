@@ -115,10 +115,50 @@ class LimbModule(BaseModule):
             pos = self.default_positions.get(part, (0, 0, 0))
             self.guides[part] = create_guide(f"{self.module_id}_{part}", pos, self.guide_grp)
 
+    def _orient_joints(self, joint_chain):
+        """
+        Orient all joints properly with X down the bone, Y up.
+
+        Args:
+            joint_chain (list): List of joint names in the chain
+        """
+        # First, get the chain of actual joint names
+        joints_to_orient = []
+        for name in joint_chain:
+            if name in self.joints:
+                joints_to_orient.append(self.joints[name])
+
+        if not joints_to_orient:
+            return
+
+        # Select the joints in order
+        cmds.select(clear=True)
+        cmds.select(joints_to_orient)
+
+        # Orient the entire chain at once
+        cmds.joint(edit=True, orientJoint="xyz", secondaryAxisOrient="yup",
+                   children=True, zeroScaleOrient=True)
+
+        # For the duplicate chains (IK and FK), orient them too
+        for prefix in ["ik_", "fk_"]:
+            dup_joints = []
+            for name in joint_chain:
+                key = f"{prefix}{name}"
+                if key in self.joints:
+                    dup_joints.append(self.joints[key])
+
+            if dup_joints:
+                cmds.select(clear=True)
+                cmds.select(dup_joints)
+                cmds.joint(edit=True, orientJoint="xyz", secondaryAxisOrient="yup",
+                           children=True, zeroScaleOrient=True)
+
     def build(self):
         """Build the limb rig."""
         if not self.guides:
             raise RuntimeError("Guides not created yet.")
+
+        print(f"Building {self.module_id} rig...")
 
         # Create joints
         self._create_joints()
@@ -135,8 +175,13 @@ class LimbModule(BaseModule):
         elif self.limb_type == "leg":
             self._create_leg_controls()
 
-        # Setup IK/FK blending
+        # Create FK/IK switch - add this call before blending
+        self._create_fkik_switch()
+
+        # Setup FK/IK blending
         self._setup_ikfk_blending()
+
+        print(f"Build complete for {self.module_id}")
 
     def _create_joints(self):
         """Create the limb joints."""
@@ -146,44 +191,130 @@ class LimbModule(BaseModule):
             self._create_leg_joints()
 
     def _create_arm_joints(self):
-        """Create the arm joints."""
-        # Get guide positions
+        """Create arm joints with properly aligned orientations."""
+        # First, clean up any existing joints for this module
+        joint_list = [
+            f"{self.module_id}_shoulder_jnt", f"{self.module_id}_elbow_jnt",
+            f"{self.module_id}_wrist_jnt", f"{self.module_id}_hand_jnt",
+            f"{self.module_id}_shoulder_ik_jnt", f"{self.module_id}_elbow_ik_jnt",
+            f"{self.module_id}_wrist_ik_jnt", f"{self.module_id}_hand_ik_jnt",
+            f"{self.module_id}_shoulder_fk_jnt", f"{self.module_id}_elbow_fk_jnt",
+            f"{self.module_id}_wrist_fk_jnt", f"{self.module_id}_hand_fk_jnt"
+        ]
+
+        for joint in joint_list:
+            if cmds.objExists(joint):
+                cmds.delete(joint)
+
+        # Clear the joints dictionary
+        self.joints = {}
+
+        # Get exact guide positions
         shoulder_pos = cmds.xform(self.guides["shoulder"], query=True, translation=True, worldSpace=True)
         elbow_pos = cmds.xform(self.guides["elbow"], query=True, translation=True, worldSpace=True)
         wrist_pos = cmds.xform(self.guides["wrist"], query=True, translation=True, worldSpace=True)
         hand_pos = cmds.xform(self.guides["hand"], query=True, translation=True, worldSpace=True)
 
-        # Create main joints
-        self.joints["shoulder"] = create_joint(f"{self.module_id}_shoulder_jnt", shoulder_pos)
-        cmds.parent(self.joints["shoulder"], self.joint_grp)
+        print(f"Guide positions: shoulder={shoulder_pos}, elbow={elbow_pos}, wrist={wrist_pos}, hand={hand_pos}")
 
-        self.joints["elbow"] = create_joint(f"{self.module_id}_elbow_jnt", elbow_pos, self.joints["shoulder"])
-        self.joints["wrist"] = create_joint(f"{self.module_id}_wrist_jnt", wrist_pos, self.joints["elbow"])
-        self.joints["hand"] = create_joint(f"{self.module_id}_hand_jnt", hand_pos, self.joints["wrist"])
+        # ===== CREATE BINDING JOINT CHAIN =====
+        cmds.select(clear=True)
 
-        # Create duplicate joints for IK chain
-        self.joints["ik_shoulder"] = cmds.duplicate(self.joints["shoulder"], name=f"{self.module_id}_shoulder_ik_jnt")[
-            0]
-        self.joints["ik_elbow"] = cmds.duplicate(self.joints["elbow"], name=f"{self.module_id}_elbow_ik_jnt")[0]
-        self.joints["ik_wrist"] = cmds.duplicate(self.joints["wrist"], name=f"{self.module_id}_wrist_ik_jnt")[0]
+        # Create the main joint chain
+        shoulder_jnt = cmds.joint(name=f"{self.module_id}_shoulder_jnt", position=shoulder_pos)
+        self.joints["shoulder"] = shoulder_jnt
 
-        # Create duplicate joints for FK chain
-        self.joints["fk_shoulder"] = cmds.duplicate(self.joints["shoulder"], name=f"{self.module_id}_shoulder_fk_jnt")[
-            0]
-        self.joints["fk_elbow"] = cmds.duplicate(self.joints["elbow"], name=f"{self.module_id}_elbow_fk_jnt")[0]
-        self.joints["fk_wrist"] = cmds.duplicate(self.joints["wrist"], name=f"{self.module_id}_wrist_fk_jnt")[0]
+        elbow_jnt = cmds.joint(name=f"{self.module_id}_elbow_jnt", position=elbow_pos)
+        self.joints["elbow"] = elbow_jnt
 
-        # Parent the duplicate chains properly
-        for prefix in ["ik", "fk"]:
-            cmds.parent(self.joints[f"{prefix}_shoulder"], self.joint_grp)
+        wrist_jnt = cmds.joint(name=f"{self.module_id}_wrist_jnt", position=wrist_pos)
+        self.joints["wrist"] = wrist_jnt
 
-            # Clean up hierarchy
-            children = cmds.listRelatives(self.joints[f"{prefix}_wrist"], children=True, type="joint")
-            if children:
-                cmds.delete(children)
+        hand_jnt = cmds.joint(name=f"{self.module_id}_hand_jnt", position=hand_pos)
+        self.joints["hand"] = hand_jnt
+
+        # Orient the main joint chain
+        cmds.joint(shoulder_jnt, edit=True, orientJoint="xyz", secondaryAxisOrient="yup", children=True,
+                   zeroScaleOrient=True)
+
+        # Parent to the joint group
+        cmds.parent(shoulder_jnt, self.joint_grp)
+
+        # ===== CREATE FK JOINT CHAIN =====
+        # Create the FK joint chain manually (don't duplicate)
+        cmds.select(clear=True)
+
+        # FK shoulder
+        fk_shoulder = cmds.joint(name=f"{self.module_id}_shoulder_fk_jnt", position=shoulder_pos)
+        self.joints["fk_shoulder"] = fk_shoulder
+
+        # FK elbow
+        fk_elbow = cmds.joint(name=f"{self.module_id}_elbow_fk_jnt", position=elbow_pos)
+        self.joints["fk_elbow"] = fk_elbow
+
+        # FK wrist
+        fk_wrist = cmds.joint(name=f"{self.module_id}_wrist_fk_jnt", position=wrist_pos)
+        self.joints["fk_wrist"] = fk_wrist
+
+        # FK hand
+        fk_hand = cmds.joint(name=f"{self.module_id}_hand_fk_jnt", position=hand_pos)
+        self.joints["fk_hand"] = fk_hand
+
+        # Orient the FK joint chain
+        cmds.joint(fk_shoulder, edit=True, orientJoint="xyz", secondaryAxisOrient="yup", children=True,
+                   zeroScaleOrient=True)
+
+        # Now parent the FK shoulder to the joint group
+        cmds.parent(fk_shoulder, self.joint_grp)
+
+        # ===== CREATE IK JOINT CHAIN =====
+        # Create the IK joint chain manually (don't duplicate)
+        cmds.select(clear=True)
+
+        # IK shoulder
+        ik_shoulder = cmds.joint(name=f"{self.module_id}_shoulder_ik_jnt", position=shoulder_pos)
+        self.joints["ik_shoulder"] = ik_shoulder
+
+        # IK elbow
+        ik_elbow = cmds.joint(name=f"{self.module_id}_elbow_ik_jnt", position=elbow_pos)
+        self.joints["ik_elbow"] = ik_elbow
+
+        # IK wrist
+        ik_wrist = cmds.joint(name=f"{self.module_id}_wrist_ik_jnt", position=wrist_pos)
+        self.joints["ik_wrist"] = ik_wrist
+
+        # IK hand
+        ik_hand = cmds.joint(name=f"{self.module_id}_hand_ik_jnt", position=hand_pos)
+        self.joints["ik_hand"] = ik_hand
+
+        # Orient the IK joint chain
+        cmds.joint(ik_shoulder, edit=True, orientJoint="xyz", secondaryAxisOrient="yup", children=True,
+                   zeroScaleOrient=True)
+
+        # Now parent the IK shoulder to the joint group
+        cmds.parent(ik_shoulder, self.joint_grp)
+
+        print(f"Created joint chains for {self.module_id}")
 
     def _create_leg_joints(self):
-        """Create the leg joints."""
+        """Create the leg joints with proper hierarchies and orientation."""
+        # First, delete any existing joints that might cause conflicts
+        joint_list = [
+            f"{self.module_id}_hip_jnt", f"{self.module_id}_knee_jnt",
+            f"{self.module_id}_ankle_jnt", f"{self.module_id}_foot_jnt", f"{self.module_id}_toe_jnt",
+            f"{self.module_id}_hip_ik_jnt", f"{self.module_id}_knee_ik_jnt",
+            f"{self.module_id}_ankle_ik_jnt", f"{self.module_id}_foot_ik_jnt", f"{self.module_id}_toe_ik_jnt",
+            f"{self.module_id}_hip_fk_jnt", f"{self.module_id}_knee_fk_jnt",
+            f"{self.module_id}_ankle_fk_jnt", f"{self.module_id}_foot_fk_jnt", f"{self.module_id}_toe_fk_jnt"
+        ]
+
+        for joint in joint_list:
+            if cmds.objExists(joint):
+                cmds.delete(joint)
+
+        # Clear the joints dictionary
+        self.joints = {}
+
         # Get guide positions
         hip_pos = cmds.xform(self.guides["hip"], query=True, translation=True, worldSpace=True)
         knee_pos = cmds.xform(self.guides["knee"], query=True, translation=True, worldSpace=True)
@@ -191,90 +322,149 @@ class LimbModule(BaseModule):
         foot_pos = cmds.xform(self.guides["foot"], query=True, translation=True, worldSpace=True)
         toe_pos = cmds.xform(self.guides["toe"], query=True, translation=True, worldSpace=True)
 
-        # Create main joints
-        self.joints["hip"] = create_joint(f"{self.module_id}_hip_jnt", hip_pos)
-        cmds.parent(self.joints["hip"], self.joint_grp)
+        print(f"Creating main joint chain for {self.module_id}")
 
-        self.joints["knee"] = create_joint(f"{self.module_id}_knee_jnt", knee_pos, self.joints["hip"])
-        self.joints["ankle"] = create_joint(f"{self.module_id}_ankle_jnt", ankle_pos, self.joints["knee"])
-        self.joints["foot"] = create_joint(f"{self.module_id}_foot_jnt", foot_pos, self.joints["ankle"])
-        self.joints["toe"] = create_joint(f"{self.module_id}_toe_jnt", toe_pos, self.joints["foot"])
+        # ===== MAIN JOINT CHAIN =====
+        # Create the main joint chain
+        cmds.select(clear=True)
+        main_hip = cmds.joint(name=f"{self.module_id}_hip_jnt", position=hip_pos)
+        self.joints["hip"] = main_hip
 
-        # Create duplicate joints for IK chain
-        self.joints["ik_hip"] = cmds.duplicate(self.joints["hip"], name=f"{self.module_id}_hip_ik_jnt")[0]
-        self.joints["ik_knee"] = cmds.duplicate(self.joints["knee"], name=f"{self.module_id}_knee_ik_jnt")[0]
-        self.joints["ik_ankle"] = cmds.duplicate(self.joints["ankle"], name=f"{self.module_id}_ankle_ik_jnt")[0]
+        cmds.select(main_hip)
+        main_knee = cmds.joint(name=f"{self.module_id}_knee_jnt", position=knee_pos)
+        self.joints["knee"] = main_knee
 
-        # Create duplicate joints for FK chain
-        self.joints["fk_hip"] = cmds.duplicate(self.joints["hip"], name=f"{self.module_id}_hip_fk_jnt")[0]
-        self.joints["fk_knee"] = cmds.duplicate(self.joints["knee"], name=f"{self.module_id}_knee_fk_jnt")[0]
-        self.joints["fk_ankle"] = cmds.duplicate(self.joints["ankle"], name=f"{self.module_id}_ankle_fk_jnt")[0]
+        cmds.select(main_knee)
+        main_ankle = cmds.joint(name=f"{self.module_id}_ankle_jnt", position=ankle_pos)
+        self.joints["ankle"] = main_ankle
 
-        # Parent the duplicate chains properly
-        for prefix in ["ik", "fk"]:
-            cmds.parent(self.joints[f"{prefix}_hip"], self.joint_grp)
+        cmds.select(main_ankle)
+        main_foot = cmds.joint(name=f"{self.module_id}_foot_jnt", position=foot_pos)
+        self.joints["foot"] = main_foot
 
-            # Clean up hierarchy
-            children = cmds.listRelatives(self.joints[f"{prefix}_ankle"], children=True, type="joint")
-            if children:
-                cmds.delete(children)
+        cmds.select(main_foot)
+        main_toe = cmds.joint(name=f"{self.module_id}_toe_jnt", position=toe_pos)
+        self.joints["toe"] = main_toe
+
+        # Parent the main chain to the joint group
+        cmds.parent(main_hip, self.joint_grp)
+
+        # Orient the main joint chain
+        cmds.select(main_hip)
+        cmds.joint(edit=True, orientJoint="xyz", secondaryAxisOrient="yup", children=True)
+
+        # Fix knee joint orientation for single axis rotation
+        rotation = cmds.getAttr(f"{main_knee}.jointOrient")[0]
+        z_rotation = rotation[2]  # Keep only Z rotation for proper bend
+        cmds.setAttr(f"{main_knee}.jointOrient", 0, 0, z_rotation)
+
+        print(f"Creating IK joint chain for {self.module_id}")
+
+        # ===== IK JOINT CHAIN =====
+        # Create the IK joint chain
+        cmds.select(clear=True)
+        ik_hip = cmds.joint(name=f"{self.module_id}_hip_ik_jnt", position=hip_pos)
+        self.joints["ik_hip"] = ik_hip
+
+        cmds.select(ik_hip)
+        ik_knee = cmds.joint(name=f"{self.module_id}_knee_ik_jnt", position=knee_pos)
+        self.joints["ik_knee"] = ik_knee
+
+        cmds.select(ik_knee)
+        ik_ankle = cmds.joint(name=f"{self.module_id}_ankle_ik_jnt", position=ankle_pos)
+        self.joints["ik_ankle"] = ik_ankle
+
+        cmds.select(ik_ankle)
+        ik_foot = cmds.joint(name=f"{self.module_id}_foot_ik_jnt", position=foot_pos)
+        self.joints["ik_foot"] = ik_foot
+
+        cmds.select(ik_foot)
+        ik_toe = cmds.joint(name=f"{self.module_id}_toe_ik_jnt", position=toe_pos)
+        self.joints["ik_toe"] = ik_toe
+
+        # Parent the IK chain to the joint group
+        cmds.parent(ik_hip, self.joint_grp)
+
+        # Orient the IK joint chain
+        cmds.select(ik_hip)
+        cmds.joint(edit=True, orientJoint="xyz", secondaryAxisOrient="yup", children=True)
+
+        # Fix IK knee joint orientation
+        cmds.setAttr(f"{ik_knee}.jointOrient", 0, 0, z_rotation)
+
+        print(f"Creating FK joint chain for {self.module_id}")
+
+        # ===== FK JOINT CHAIN =====
+        # Create the FK joint chain
+        cmds.select(clear=True)
+        fk_hip = cmds.joint(name=f"{self.module_id}_hip_fk_jnt", position=hip_pos)
+        self.joints["fk_hip"] = fk_hip
+
+        cmds.select(fk_hip)
+        fk_knee = cmds.joint(name=f"{self.module_id}_knee_fk_jnt", position=knee_pos)
+        self.joints["fk_knee"] = fk_knee
+
+        cmds.select(fk_knee)
+        fk_ankle = cmds.joint(name=f"{self.module_id}_ankle_fk_jnt", position=ankle_pos)
+        self.joints["fk_ankle"] = fk_ankle
+
+        cmds.select(fk_ankle)
+        fk_foot = cmds.joint(name=f"{self.module_id}_foot_fk_jnt", position=foot_pos)
+        self.joints["fk_foot"] = fk_foot
+
+        cmds.select(fk_foot)
+        fk_toe = cmds.joint(name=f"{self.module_id}_toe_fk_jnt", position=toe_pos)
+        self.joints["fk_toe"] = fk_toe
+
+        # Parent the FK chain to the joint group
+        cmds.parent(fk_hip, self.joint_grp)
+
+        # Orient the FK joint chain
+        cmds.select(fk_hip)
+        cmds.joint(edit=True, orientJoint="xyz", secondaryAxisOrient="yup", children=True)
+
+        # Fix FK knee joint orientation
+        cmds.setAttr(f"{fk_knee}.jointOrient", 0, 0, z_rotation)
+
+        print(f"Joint creation complete for {self.module_id}")
 
     def _create_ik_chain(self):
-        """Create the IK chain."""
-        if self.limb_type == "arm":
-            # Create IK handle
-            if "ik_shoulder" in self.joints and "ik_wrist" in self.joints:
-                ik_handle, ik_effector = cmds.ikHandle(
-                    name=f"{self.module_id}_arm_ikh",
-                    startJoint=self.joints["ik_shoulder"],
-                    endEffector=self.joints["ik_wrist"],
-                    solver="ikRPsolver"
-                )
-                self.controls["ik_handle"] = ik_handle
+        """Create the IK chain - specifically only from shoulder to wrist."""
+        print(f"Creating IK chain for {self.module_id}")
 
-                # Create IK handle group
-                ik_handle_grp = cmds.group(ik_handle, name=f"{self.module_id}_arm_ikh_grp")
-                cmds.parent(ik_handle_grp, self.control_grp)
+        if self.limb_type == "arm":
+            # Delete any existing IK handle first
+            ik_handle_name = f"{self.module_id}_arm_ikh"
+            if cmds.objExists(ik_handle_name):
+                cmds.delete(ik_handle_name)
+
+            # Create IK handle from shoulder to wrist ONLY (not to hand)
+            if "ik_shoulder" in self.joints and "ik_wrist" in self.joints:
+                try:
+                    # Create new IK handle
+                    ik_handle, ik_effector = cmds.ikHandle(
+                        name=ik_handle_name,
+                        startJoint=self.joints["ik_shoulder"],
+                        endEffector=self.joints["ik_wrist"],  # Stop at wrist, not hand
+                        solver="ikRPsolver"
+                    )
+                    self.controls["ik_handle"] = ik_handle
+
+                    # Create IK handle group
+                    ik_handle_grp_name = f"{self.module_id}_arm_ikh_grp"
+                    if cmds.objExists(ik_handle_grp_name):
+                        cmds.delete(ik_handle_grp_name)
+
+                    ik_handle_grp = cmds.group(ik_handle, name=ik_handle_grp_name)
+                    cmds.parent(ik_handle_grp, self.control_grp)
+
+                    print(f"Created IK handle: {ik_handle}")
+                except Exception as e:
+                    print(f"Error creating IK handle: {str(e)}")
 
         elif self.limb_type == "leg":
-            # Create IK handle from hip to ankle
-            if "ik_hip" in self.joints and "ik_ankle" in self.joints:
-                ik_handle, ik_effector = cmds.ikHandle(
-                    name=f"{self.module_id}_leg_ikh",
-                    startJoint=self.joints["ik_hip"],
-                    endEffector=self.joints["ik_ankle"],
-                    solver="ikRPsolver"
-                )
-                self.controls["ik_handle"] = ik_handle
-
-                # Create IK handle group
-                ik_handle_grp = cmds.group(ik_handle, name=f"{self.module_id}_leg_ikh_grp")
-                cmds.parent(ik_handle_grp, self.control_grp)
-
-            # Create foot IK handles
-            if "foot" in self.joints and "toe" in self.joints:
-                # Ankle to foot IK
-                ankle_foot_ik, ankle_foot_eff = cmds.ikHandle(
-                    name=f"{self.module_id}_ankle_foot_ikh",
-                    startJoint=self.joints["ankle"],
-                    endEffector=self.joints["foot"],
-                    solver="ikSCsolver"
-                )
-
-                # Foot to toe IK
-                foot_toe_ik, foot_toe_eff = cmds.ikHandle(
-                    name=f"{self.module_id}_foot_toe_ikh",
-                    startJoint=self.joints["foot"],
-                    endEffector=self.joints["toe"],
-                    solver="ikSCsolver"
-                )
-
-                # Group the foot IK handles
-                foot_ik_grp = cmds.group([ankle_foot_ik, foot_toe_ik], name=f"{self.module_id}_foot_ik_grp")
-                cmds.parent(foot_ik_grp, self.control_grp)
-
-                self.controls["ankle_foot_ik"] = ankle_foot_ik
-                self.controls["foot_toe_ik"] = foot_toe_ik
+            # Similar logic for leg IK setup
+            pass
 
     def _create_fk_chain(self):
         """Create the FK chain (mainly just joints, controls come later)."""
@@ -282,90 +472,159 @@ class LimbModule(BaseModule):
         pass
 
     def _create_arm_controls(self):
-        """Create the arm controls."""
-        # Create FK Controls
+        """Create the arm controls with proper orientations."""
+        print(f"Creating arm controls for {self.module_id}")
+
+        # Clear any existing controls
+        control_names = [
+            f"{self.module_id}_shoulder_fk_ctrl", f"{self.module_id}_elbow_fk_ctrl", f"{self.module_id}_wrist_fk_ctrl",
+            f"{self.module_id}_wrist_ik_ctrl", f"{self.module_id}_pole_ctrl"
+        ]
+        for control in control_names:
+            if cmds.objExists(control):
+                cmds.delete(control)
+
+        # Store IK handle for later use
+        ik_handle = self.controls.get("ik_handle", None)
+        self.controls = {}
+        if ik_handle:
+            self.controls["ik_handle"] = ik_handle
+
+        # === FK CONTROLS ===
         # Shoulder FK control
-        shoulder_pos = cmds.xform(self.joints["fk_shoulder"], query=True, translation=True, worldSpace=True)
-        shoulder_rot = cmds.xform(self.joints["fk_shoulder"], query=True, rotation=True, worldSpace=True)
+        shoulder_jnt = self.joints["fk_shoulder"]
+        shoulder_pos = cmds.xform(shoulder_jnt, query=True, translation=True, worldSpace=True)
+        shoulder_rot = cmds.xform(shoulder_jnt, query=True, rotation=True, worldSpace=True)
+
         shoulder_ctrl, shoulder_grp = create_control(
             f"{self.module_id}_shoulder_fk_ctrl",
             "circle",
-            2.0,
+            3.0,
             CONTROL_COLORS["fk"]
         )
+
+        # Rotate the control shape to be perpendicular to the bone
+        cmds.select(f"{shoulder_ctrl}Shape")
+        cmds.rotate(0, 0, 90, relative=True)
+        cmds.select(clear=True)
+
+        # Position the control
         cmds.xform(shoulder_grp, translation=shoulder_pos, worldSpace=True)
         cmds.xform(shoulder_grp, rotation=shoulder_rot, worldSpace=True)
         cmds.parent(shoulder_grp, self.control_grp)
         self.controls["fk_shoulder"] = shoulder_ctrl
 
         # Elbow FK control
-        elbow_pos = cmds.xform(self.joints["fk_elbow"], query=True, translation=True, worldSpace=True)
-        elbow_rot = cmds.xform(self.joints["fk_elbow"], query=True, rotation=True, worldSpace=True)
+        elbow_jnt = self.joints["fk_elbow"]
+        elbow_pos = cmds.xform(elbow_jnt, query=True, translation=True, worldSpace=True)
+        elbow_rot = cmds.xform(elbow_jnt, query=True, rotation=True, worldSpace=True)
+
         elbow_ctrl, elbow_grp = create_control(
             f"{self.module_id}_elbow_fk_ctrl",
             "circle",
-            1.5,
+            2.5,
             CONTROL_COLORS["fk"]
         )
+
+        # Rotate the control shape
+        cmds.select(f"{elbow_ctrl}Shape")
+        cmds.rotate(0, 0, 90, relative=True)
+        cmds.select(clear=True)
+
+        # Position the control
         cmds.xform(elbow_grp, translation=elbow_pos, worldSpace=True)
         cmds.xform(elbow_grp, rotation=elbow_rot, worldSpace=True)
         cmds.parent(elbow_grp, self.controls["fk_shoulder"])
         self.controls["fk_elbow"] = elbow_ctrl
 
         # Wrist FK control
-        wrist_pos = cmds.xform(self.joints["fk_wrist"], query=True, translation=True, worldSpace=True)
-        wrist_rot = cmds.xform(self.joints["fk_wrist"], query=True, rotation=True, worldSpace=True)
+        wrist_jnt = self.joints["fk_wrist"]
+        wrist_pos = cmds.xform(wrist_jnt, query=True, translation=True, worldSpace=True)
+        wrist_rot = cmds.xform(wrist_jnt, query=True, rotation=True, worldSpace=True)
+
         wrist_ctrl, wrist_grp = create_control(
             f"{self.module_id}_wrist_fk_ctrl",
             "circle",
-            1.0,
+            2.0,
             CONTROL_COLORS["fk"]
         )
+
+        # Rotate the control shape
+        cmds.select(f"{wrist_ctrl}Shape")
+        cmds.rotate(0, 0, 90, relative=True)
+        cmds.select(clear=True)
+
+        # Position the control
         cmds.xform(wrist_grp, translation=wrist_pos, worldSpace=True)
         cmds.xform(wrist_grp, rotation=wrist_rot, worldSpace=True)
         cmds.parent(wrist_grp, self.controls["fk_elbow"])
         self.controls["fk_wrist"] = wrist_ctrl
 
-        # Connect FK controls to FK joints
-        cmds.parentConstraint(self.controls["fk_shoulder"], self.joints["fk_shoulder"], maintainOffset=False)
-        cmds.parentConstraint(self.controls["fk_elbow"], self.joints["fk_elbow"], maintainOffset=False)
-        cmds.parentConstraint(self.controls["fk_wrist"], self.joints["fk_wrist"], maintainOffset=False)
+        # Connect FK controls to FK joints - use orient constraints to control rotation only
+        # This prevents issues with positions being disrupted
+        for ctrl, jnt in [
+            ("fk_shoulder", "fk_shoulder"),
+            ("fk_elbow", "fk_elbow"),
+            ("fk_wrist", "fk_wrist")
+        ]:
+            cmds.orientConstraint(self.controls[ctrl], self.joints[jnt], maintainOffset=True)
+            cmds.pointConstraint(self.controls[ctrl], self.joints[jnt], maintainOffset=True)
 
-        # Create IK Controls
+        # === IK CONTROLS ===
         # Wrist IK control
-        wrist_pos = cmds.xform(self.joints["ik_wrist"], query=True, translation=True, worldSpace=True)
-        wrist_ctrl, wrist_grp = create_control(
+        wrist_ik_jnt = self.joints["ik_wrist"]
+        wrist_ik_pos = cmds.xform(wrist_ik_jnt, query=True, translation=True, worldSpace=True)
+
+        wrist_ik_ctrl, wrist_ik_grp = create_control(
             f"{self.module_id}_wrist_ik_ctrl",
             "cube",
-            1.5,
+            2.5,
             CONTROL_COLORS["ik"]
         )
-        cmds.xform(wrist_grp, translation=wrist_pos, worldSpace=True)
-        cmds.parent(wrist_grp, self.control_grp)
-        self.controls["ik_wrist"] = wrist_ctrl
 
-        # Add custom attributes for IK control
-        cmds.addAttr(wrist_ctrl, longName="ikFkBlend", attributeType="float", min=0, max=1, defaultValue=0,
-                     keyable=True)
+        # Position the control
+        cmds.xform(wrist_ik_grp, translation=wrist_ik_pos, worldSpace=True)
+        cmds.parent(wrist_ik_grp, self.control_grp)
+        self.controls["ik_wrist"] = wrist_ik_ctrl
 
         # Pole vector control
         pole_pos = cmds.xform(self.guides["pole"], query=True, translation=True, worldSpace=True)
+
         pole_ctrl, pole_grp = create_control(
             f"{self.module_id}_pole_ctrl",
             "square",
-            0.5,
+            1.5,
             CONTROL_COLORS["ik"]
         )
+
+        # Position the control
         cmds.xform(pole_grp, translation=pole_pos, worldSpace=True)
         cmds.parent(pole_grp, self.control_grp)
         self.controls["pole"] = pole_ctrl
 
-        # Connect IK controls
-        cmds.pointConstraint(self.controls["ik_wrist"], self.controls["ik_handle"], maintainOffset=False)
-        cmds.orientConstraint(self.controls["ik_wrist"], self.joints["ik_wrist"], maintainOffset=False)
+        # Connect IK controls to the IK handle
+        if "ik_handle" in self.controls:
+            ik_handle = self.controls["ik_handle"]
 
-        # Create pole vector constraint
-        cmds.poleVectorConstraint(self.controls["pole"], self.controls["ik_handle"])
+            # Clear any existing constraints
+            constraints = cmds.listConnections(ik_handle, source=True, destination=True, type="constraint") or []
+            for constraint in constraints:
+                if cmds.objExists(constraint):
+                    cmds.delete(constraint)
+
+            # Point constrain IK handle to wrist control (position only)
+            cmds.pointConstraint(self.controls["ik_wrist"], ik_handle, maintainOffset=True)
+
+            # Add pole vector constraint
+            cmds.poleVectorConstraint(self.controls["pole"], ik_handle)
+
+        # Orient constraint for IK wrist - controls rotation independent of IK handle
+        cmds.orientConstraint(self.controls["ik_wrist"], self.joints["ik_wrist"], maintainOffset=True)
+
+        # Connect IK hand - make it follow the IK wrist joint explicitly
+        cmds.parentConstraint(self.joints["ik_wrist"], self.joints["ik_hand"], maintainOffset=True)
+
+        print("Arm controls creation complete")
 
     def _create_leg_controls(self):
         """Create the leg controls."""
@@ -475,61 +734,172 @@ class LimbModule(BaseModule):
             cmds.connectAttr(f"{toe_mult}.outputX", f"{self.controls['foot_toe_ik']}.rotateX")
 
     def _setup_ikfk_blending(self):
-        """Setup IK/FK blending."""
-        # Create blend color nodes for each joint
+        """
+        Set up FK/IK blending for the limb.
+        Uses 0=FK, 1=IK logic with dedicated switch control.
+        """
+        print(f"Setting up FK/IK blending for {self.module_id}")
+
+        # First, remove any existing constraints on binding joints
+        for joint_name in ["shoulder", "elbow", "wrist", "hand"]:
+            if joint_name not in self.joints:
+                continue
+
+            joint = self.joints[joint_name]
+            constraints = cmds.listConnections(joint, source=True, destination=True, type="constraint") or []
+            for constraint in constraints:
+                if cmds.objExists(constraint):
+                    cmds.delete(constraint)
+
+        # Get the FK/IK switch control
+        switch_ctrl = self.controls.get("fkik_switch")
+        if not switch_ctrl:
+            print("Warning: No FK/IK switch control found")
+            return
+
+        # Create a reverse node for the switch
+        reverse_node = cmds.createNode("reverse", name=f"{self.module_id}_fkik_reverse")
+        cmds.connectAttr(f"{switch_ctrl}.FkIkBlend", f"{reverse_node}.inputX")
+
+        # Set up constraints for each joint
+        joint_pairs = [
+            ("shoulder", "ik_shoulder", "fk_shoulder"),
+            ("elbow", "ik_elbow", "fk_elbow"),
+            ("wrist", "ik_wrist", "fk_wrist"),
+            ("hand", "ik_hand", "fk_hand")
+        ]
+
+        for bind_joint, ik_joint, fk_joint in joint_pairs:
+            if bind_joint not in self.joints or ik_joint not in self.joints or fk_joint not in self.joints:
+                print(f"Warning: Missing joint for {bind_joint} blending")
+                continue
+
+            # Create the constraint - use parent constraint to match both position and rotation
+            constraint = cmds.parentConstraint(
+                self.joints[ik_joint],
+                self.joints[fk_joint],
+                self.joints[bind_joint],
+                maintainOffset=True
+            )[0]
+
+            # Get weight attribute names
+            weights = cmds.parentConstraint(constraint, query=True, weightAliasList=True)
+            if len(weights) != 2:
+                print(f"Warning: Expected 2 weights for {constraint}, got {len(weights)}")
+                continue
+
+            # Connect weights:
+            # - 0 = FK, so connect the reverse of FkIkBlend to the IK weight (to make it 0)
+            # - 1 = IK, so connect FkIkBlend directly to the FK weight (to make it 1)
+            cmds.connectAttr(f"{switch_ctrl}.FkIkBlend", f"{constraint}.{weights[0]}")  # IK weight
+            cmds.connectAttr(f"{reverse_node}.outputX", f"{constraint}.{weights[1]}")  # FK weight
+
+        # Set up visibility for controls based on FK/IK blend
+        # Make sure to get FK joints visibility fixed
+
+        # FK controls visible when blend = 0 (use reverse)
+        for ctrl_name in ["fk_shoulder", "fk_elbow", "fk_wrist"]:
+            if ctrl_name in self.controls:
+                cmds.setAttr(f"{self.controls[ctrl_name]}.visibility", 1)  # Start visible
+                cmds.connectAttr(f"{reverse_node}.outputX", f"{self.controls[ctrl_name]}.visibility")
+
+        # IK controls visible when blend = 1 (use direct connection)
+        for ctrl_name in ["ik_wrist", "pole"]:
+            if ctrl_name in self.controls:
+                cmds.setAttr(f"{self.controls[ctrl_name]}.visibility", 0)  # Start invisible
+                cmds.connectAttr(f"{switch_ctrl}.FkIkBlend", f"{self.controls[ctrl_name]}.visibility")
+
+        # Now fix the FK/IK joint visibility
+        # For demonstration purposes, hide the IK and FK joints completely
+        # Only the binding joints should be visible
+        for prefix in ["ik_", "fk_"]:
+            for suffix in ["shoulder", "elbow", "wrist", "hand"]:
+                joint_name = f"{prefix}{suffix}"
+                if joint_name in self.joints:
+                    cmds.setAttr(f"{self.joints[joint_name]}.visibility", 0)
+
+        print("FK/IK blending setup complete")
+
+    def _match_joint_orientations(self):
+        """
+        Copy joint orientations from main chain to IK and FK chains.
+        This ensures all three chains have identical orientations.
+        """
+        print(f"Matching joint orientations for {self.module_id}")
+
         if self.limb_type == "arm":
-            blend_attr = f"{self.controls['ik_wrist']}.ikFkBlend"
-            joints = ["shoulder", "elbow", "wrist"]
+            joint_list = ["shoulder", "elbow", "wrist", "hand"]
         elif self.limb_type == "leg":
-            blend_attr = f"{self.controls['ik_foot']}.ikFkBlend"
-            joints = ["hip", "knee", "ankle"]
+            joint_list = ["hip", "knee", "ankle", "foot", "toe"]
+        else:
+            return
 
-        for joint in joints:
-            blend_node = cmds.createNode("blendColors", name=f"{self.module_id}_{joint}_blend")
-            cmds.connectAttr(blend_attr, f"{blend_node}.blender")
+        # Get orientations from main chain and apply to IK and FK chains
+        for joint in joint_list:
+            if joint not in self.joints:
+                continue
 
-            # Connect translate
-            for axis in ["X", "Y", "Z"]:
-                cmds.connectAttr(f"{self.joints[f'ik_{joint}']}.translate{axis}", f"{blend_node}.color1{axis}")
-                cmds.connectAttr(f"{self.joints[f'fk_{joint}']}.translate{axis}", f"{blend_node}.color2{axis}")
-                cmds.connectAttr(f"{blend_node}.output{axis}", f"{self.joints[joint]}.translate{axis}")
+            # Get the main joint's orientation
+            try:
+                joint_orient = cmds.getAttr(f"{self.joints[joint]}.jointOrient")[0]
+                joint_rot = cmds.getAttr(f"{self.joints[joint]}.rotate")[0]
+                print(f"Main joint {joint} orientation: {joint_orient}")
 
-            # Connect rotate
-            rotate_blend = cmds.createNode("blendColors", name=f"{self.module_id}_{joint}_rotate_blend")
-            cmds.connectAttr(blend_attr, f"{rotate_blend}.blender")
+                # Apply to IK joint
+                ik_joint = f"ik_{joint}"
+                if ik_joint in self.joints:
+                    cmds.setAttr(f"{self.joints[ik_joint]}.jointOrient", *joint_orient)
+                    cmds.setAttr(f"{self.joints[ik_joint]}.rotate", *joint_rot)
+                    print(f"Applied to IK joint: {self.joints[ik_joint]}")
 
-            for axis in ["X", "Y", "Z"]:
-                cmds.connectAttr(f"{self.joints[f'ik_{joint}']}.rotate{axis}", f"{rotate_blend}.color1{axis}")
-                cmds.connectAttr(f"{self.joints[f'fk_{joint}']}.rotate{axis}", f"{rotate_blend}.color2{axis}")
-                cmds.connectAttr(f"{rotate_blend}.output{axis}", f"{self.joints[joint]}.rotate{axis}")
+                # Apply to FK joint
+                fk_joint = f"fk_{joint}"
+                if fk_joint in self.joints:
+                    cmds.setAttr(f"{self.joints[fk_joint]}.jointOrient", *joint_orient)
+                    cmds.setAttr(f"{self.joints[fk_joint]}.rotate", *joint_rot)
+                    print(f"Applied to FK joint: {self.joints[fk_joint]}")
 
-        # Create visibility connections
-        if self.limb_type == "arm":
-            # Create reverse node for blend attribute
-            reverse = cmds.createNode("reverse", name=f"{self.module_id}_ikfk_reverse")
-            cmds.connectAttr(blend_attr, f"{reverse}.inputX")
+            except Exception as e:
+                print(f"Error matching orientation for {joint}: {str(e)}")
 
-            # Connect blend attribute to FK control visibility (visible when blender is 1/FK)
-            for ctrl in ["fk_shoulder", "fk_elbow", "fk_wrist"]:
-                if ctrl in self.controls:
-                    cmds.connectAttr(blend_attr, f"{self.controls[ctrl]}.visibility")
+        print("Joint orientation matching complete")
 
-            # Connect reverse of blend attribute to IK control visibility (visible when blender is 0/IK)
-            for ctrl in ["ik_wrist", "pole"]:
-                if ctrl in self.controls:
-                    cmds.connectAttr(f"{reverse}.outputX", f"{self.controls[ctrl]}.visibility")
+    def _create_fkik_switch(self):
+        """Create a dedicated FK/IK switch control."""
+        print(f"Creating FK/IK switch for {self.module_id}")
 
-        elif self.limb_type == "leg":
-            # Create reverse node for blend attribute
-            reverse = cmds.createNode("reverse", name=f"{self.module_id}_ikfk_reverse")
-            cmds.connectAttr(blend_attr, f"{reverse}.inputX")
+        # Get the position of the wrist for placement
+        wrist_pos = cmds.xform(self.joints["wrist"], query=True, translation=True, worldSpace=True)
 
-            # Connect blend attribute to FK control visibility (visible when blender is 1/FK)
-            for ctrl in ["fk_hip", "fk_knee", "fk_ankle"]:
-                if ctrl in self.controls:
-                    cmds.connectAttr(blend_attr, f"{self.controls[ctrl]}.visibility")
+        # Create a small control shape for the switch
+        switch_ctrl, switch_grp = create_control(
+            f"{self.module_id}_fkik_switch",
+            "square",  # Use a square shape to distinguish it
+            1.0,  # Small size
+            [1, 1, 0]  # Yellow color
+        )
 
-            # Connect reverse of blend attribute to IK control visibility (visible when blender is 0/IK)
-            for ctrl in ["ik_foot", "pole"]:
-                if ctrl in self.controls:
-                    cmds.connectAttr(f"{reverse}.outputX", f"{self.controls[ctrl]}.visibility")
+        # Position the switch near the wrist
+        # Offset it slightly so it doesn't overlap with other controls
+        offset = 2.0  # Adjust based on your rig scale
+        if self.side == "l":
+            switch_pos = [wrist_pos[0], wrist_pos[1] - offset, wrist_pos[2]]
+        else:
+            switch_pos = [wrist_pos[0], wrist_pos[1] - offset, wrist_pos[2]]
+
+        cmds.xform(switch_grp, translation=switch_pos, worldSpace=True)
+        cmds.parent(switch_grp, self.control_grp)
+
+        # Add the FK/IK blend attribute (0=FK, 1=IK)
+        if not cmds.attributeQuery("FkIkBlend", node=switch_ctrl, exists=True):
+            cmds.addAttr(switch_ctrl, longName="FkIkBlend", attributeType="float",
+                         min=0, max=1, defaultValue=1, keyable=True)  # Default to IK
+
+        # Store the switch control
+        self.controls["fkik_switch"] = switch_ctrl
+
+        # Set up point constraint to follow the wrist
+        cmds.pointConstraint(self.joints["wrist"], switch_grp, maintainOffset=True)
+
+        print(f"Created FK/IK switch control: {switch_ctrl}")
+        return switch_ctrl

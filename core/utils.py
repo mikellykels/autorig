@@ -103,7 +103,6 @@ def create_guide(name, position=(0, 0, 0), parent=None):
 
     return guide
 
-
 def create_joint(name, position=(0, 0, 0), parent=None):
     """
     Create a joint at the specified position.
@@ -135,12 +134,7 @@ def create_joint(name, position=(0, 0, 0), parent=None):
     else:
         cmds.select(clear=True)
 
-    # Orient joints with X down the bone, Y up
-    if parent:
-        cmds.joint(joint, edit=True, orientJoint="xyz", secondaryAxisOrient="yup")
-
     return joint
-
 
 def set_color_override(obj, color):
     """
