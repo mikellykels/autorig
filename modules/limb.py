@@ -163,6 +163,8 @@ class LimbModule(BaseModule):
         # Create joints
         self._create_joints()
 
+        self._fix_joint_orientations()
+
         # Create IK chain
         self._create_ik_chain()
 
@@ -474,13 +476,16 @@ class LimbModule(BaseModule):
 
                 # Create foot roll system - ankle to foot and foot to toe
                 if "ik_ankle" in self.joints and "ik_foot" in self.joints and "ik_toe" in self.joints:
+                    print(f"Creating foot roll system for {self.module_id}")
+
                     # Delete any existing foot IK handles
                     ankle_foot_ik_name = f"{self.module_id}_ankle_foot_ikh"
                     foot_toe_ik_name = f"{self.module_id}_foot_toe_ikh"
+                    foot_roll_grp_name = f"{self.module_id}_foot_roll_grp"
 
-                    for ik_name in [ankle_foot_ik_name, foot_toe_ik_name]:
-                        if cmds.objExists(ik_name):
-                            cmds.delete(ik_name)
+                    for name in [ankle_foot_ik_name, foot_toe_ik_name, foot_roll_grp_name]:
+                        if cmds.objExists(name):
+                            cmds.delete(name)
 
                     # Create ankle to foot IK handle
                     ankle_foot_ik, ankle_foot_eff = cmds.ikHandle(
@@ -498,18 +503,55 @@ class LimbModule(BaseModule):
                         solver="ikSCsolver"
                     )
 
-                    # Group the foot IK handles
-                    foot_ik_grp_name = f"{self.module_id}_foot_ik_grp"
-                    if cmds.objExists(foot_ik_grp_name):
-                        cmds.delete(foot_ik_grp_name)
+                    # Get position data for reverse foot setup
+                    ankle_pos = cmds.xform(self.joints["ik_ankle"], query=True, translation=True, worldSpace=True)
+                    foot_pos = cmds.xform(self.joints["ik_foot"], query=True, translation=True, worldSpace=True)
+                    toe_pos = cmds.xform(self.joints["ik_toe"], query=True, translation=True, worldSpace=True)
 
-                    foot_ik_grp = cmds.group([ankle_foot_ik, foot_toe_ik], name=foot_ik_grp_name)
-                    cmds.parent(foot_ik_grp, self.control_grp)
+                    # Get heel position - it's a guide
+                    heel_pos = cmds.xform(self.guides["heel"], query=True, translation=True, worldSpace=True)
 
+                    # First, create a main foot roll group to contain everything
+                    foot_roll_grp = cmds.group(empty=True, name=foot_roll_grp_name)
+                    cmds.xform(foot_roll_grp, translation=[0, 0, 0], worldSpace=True)
+                    cmds.parent(foot_roll_grp, self.control_grp)  # Parent to control group
+
+                    # Create reverse foot groups hierarchy
+                    heel_grp = cmds.group(empty=True, name=f"{self.module_id}_heel_pivot_grp")
+                    cmds.xform(heel_grp, translation=heel_pos, worldSpace=True)
+                    cmds.parent(heel_grp, foot_roll_grp)  # Parent to foot roll group
+
+                    toe_grp = cmds.group(empty=True, name=f"{self.module_id}_toe_pivot_grp")
+                    cmds.xform(toe_grp, translation=toe_pos, worldSpace=True)
+                    cmds.parent(toe_grp, heel_grp)
+
+                    ball_grp = cmds.group(empty=True, name=f"{self.module_id}_ball_pivot_grp")
+                    cmds.xform(ball_grp, translation=foot_pos, worldSpace=True)
+                    cmds.parent(ball_grp, toe_grp)
+
+                    ankle_grp = cmds.group(empty=True, name=f"{self.module_id}_ankle_pivot_grp")
+                    cmds.xform(ankle_grp, translation=ankle_pos, worldSpace=True)
+                    cmds.parent(ankle_grp, ball_grp)
+
+                    # Parent IK handles to appropriate groups
+                    cmds.parent(foot_toe_ik, ball_grp)
+                    cmds.parent(ankle_foot_ik, ankle_grp)
+
+                    # Parent main leg IK handle to ankle group
+                    cmds.parent(ik_handle, ankle_grp)
+
+                    # Store references to the pivot groups
+                    self.controls["foot_roll_grp"] = foot_roll_grp
+                    self.controls["heel_pivot"] = heel_grp
+                    self.controls["toe_pivot"] = toe_grp
+                    self.controls["ball_pivot"] = ball_grp
+                    self.controls["ankle_pivot"] = ankle_grp
+
+                    # Store the foot IK handles
                     self.controls["ankle_foot_ik"] = ankle_foot_ik
                     self.controls["foot_toe_ik"] = foot_toe_ik
 
-                    print(f"Created foot roll IK handles")
+                    print(f"Created reverse foot pivot system for {self.module_id}")
 
     def _create_fk_chain(self):
         """Create the FK chain (mainly just joints, controls come later)."""
@@ -680,6 +722,13 @@ class LimbModule(BaseModule):
         ankle_foot_ik = self.controls.get("ankle_foot_ik", None)
         foot_toe_ik = self.controls.get("foot_toe_ik", None)
 
+        # Store foot roll groups for later use
+        foot_roll_grp = self.controls.get("foot_roll_grp", None)
+        heel_pivot = self.controls.get("heel_pivot", None)
+        toe_pivot = self.controls.get("toe_pivot", None)
+        ball_pivot = self.controls.get("ball_pivot", None)
+        ankle_pivot = self.controls.get("ankle_pivot", None)
+
         self.controls = {}
 
         # Restore IK handles
@@ -689,6 +738,18 @@ class LimbModule(BaseModule):
             self.controls["ankle_foot_ik"] = ankle_foot_ik
         if foot_toe_ik:
             self.controls["foot_toe_ik"] = foot_toe_ik
+
+        # Restore foot roll groups
+        if foot_roll_grp:
+            self.controls["foot_roll_grp"] = foot_roll_grp
+        if heel_pivot:
+            self.controls["heel_pivot"] = heel_pivot
+        if toe_pivot:
+            self.controls["toe_pivot"] = toe_pivot
+        if ball_pivot:
+            self.controls["ball_pivot"] = ball_pivot
+        if ankle_pivot:
+            self.controls["ankle_pivot"] = ankle_pivot
 
         # === FK CONTROLS - WITH LARGER SIZES ===
         # Hip FK control
@@ -700,7 +761,7 @@ class LimbModule(BaseModule):
         hip_ctrl, hip_grp = create_control(
             f"{self.module_id}_hip_fk_ctrl",
             "circle",
-            10.0,  # Larger size
+            5.0,  # Larger size
             CONTROL_COLORS["fk"],
             normal=[1, 0, 0]  # This makes the circle face along X axis
         )
@@ -720,7 +781,7 @@ class LimbModule(BaseModule):
         knee_ctrl, knee_grp = create_control(
             f"{self.module_id}_knee_fk_ctrl",
             "circle",
-            7.0,  # Larger size
+            4.0,  # Larger size
             CONTROL_COLORS["fk"],
             normal=[1, 0, 0]  # This makes the circle face along X axis
         )
@@ -740,7 +801,7 @@ class LimbModule(BaseModule):
         ankle_ctrl, ankle_grp = create_control(
             f"{self.module_id}_ankle_fk_ctrl",
             "circle",
-            5.0,  # Larger size
+            3.0,  # Larger size
             CONTROL_COLORS["fk"],
             normal=[1, 0, 0]  # This makes the circle face along X axis
         )
@@ -813,39 +874,68 @@ class LimbModule(BaseModule):
                 if cmds.objExists(constraint):
                     cmds.delete(constraint)
 
-            # Connect ankle control to leg IK handle
-            cmds.pointConstraint(self.controls["ik_ankle"], ik_handle, maintainOffset=True)
-
-            # Add pole vector constraint
+            # Connect pole vector constraint
             cmds.poleVectorConstraint(self.controls["pole"], ik_handle)
 
-        # Set up foot roll
-        if "ankle_foot_ik" in self.controls and "foot_toe_ik" in self.controls:
+        # Set up foot roll - using the pivot groups created in _create_ik_chain
+        if all(key in self.controls for key in ["heel_pivot", "toe_pivot", "ball_pivot", "ankle_pivot"]):
+            print(f"Setting up foot roll connections for {self.module_id}")
+
             # Create utility nodes for foot attributes
-            roll_mult = cmds.createNode("multiplyDivide", name=f"{self.module_id}_roll_mult")
+            roll_cond = cmds.createNode("condition", name=f"{self.module_id}_roll_condition")
+
+            # Roll: +value = ball pivot (toe up), -value = heel pivot (heel up)
+            cmds.setAttr(f"{roll_cond}.operation", 2)  # Greater than
+            cmds.setAttr(f"{roll_cond}.colorIfFalseR", 0)
+            cmds.setAttr(f"{roll_cond}.secondTerm", 0)
+
+            # Toe pivot
             toe_mult = cmds.createNode("multiplyDivide", name=f"{self.module_id}_toe_mult")
-            heel_mult = cmds.createNode("multiplyDivide", name=f"{self.module_id}_heel_mult")
 
-            # Connect foot roll attributes
-            cmds.connectAttr(f"{ankle_ik_ctrl}.roll", f"{roll_mult}.input1X")
+            # Tilt: side-to-side rotation
+            tilt_mult = cmds.createNode("multiplyDivide", name=f"{self.module_id}_tilt_mult")
+
+            # Connect attributes
+            # Roll - for positive values (toe up)
+            cmds.connectAttr(f"{ankle_ik_ctrl}.roll", f"{roll_cond}.firstTerm")
+            cmds.connectAttr(f"{ankle_ik_ctrl}.roll", f"{roll_cond}.colorIfTrueR")
+            cmds.connectAttr(f"{roll_cond}.outColorR", f"{self.controls['ball_pivot']}.rotateX")
+
+            # Roll - for negative values (heel up)
+            neg_roll = cmds.createNode("multiplyDivide", name=f"{self.module_id}_neg_roll_mult")
+            cmds.setAttr(f"{neg_roll}.input2X", -1)  # Negate the value
+            cmds.connectAttr(f"{ankle_ik_ctrl}.roll", f"{neg_roll}.input1X")
+
+            heel_cond = cmds.createNode("condition", name=f"{self.module_id}_heel_condition")
+            cmds.setAttr(f"{heel_cond}.operation", 4)  # Less than
+            cmds.setAttr(f"{heel_cond}.colorIfFalseR", 0)
+            cmds.setAttr(f"{heel_cond}.secondTerm", 0)
+            cmds.connectAttr(f"{ankle_ik_ctrl}.roll", f"{heel_cond}.firstTerm")
+            cmds.connectAttr(f"{neg_roll}.outputX", f"{heel_cond}.colorIfTrueR")
+            cmds.connectAttr(f"{heel_cond}.outColorR", f"{self.controls['heel_pivot']}.rotateX")
+
+            # Toe
             cmds.connectAttr(f"{ankle_ik_ctrl}.toe", f"{toe_mult}.input1X")
-            cmds.connectAttr(f"{ankle_ik_ctrl}.heel", f"{heel_mult}.input1X")
+            cmds.setAttr(f"{toe_mult}.input2X", 1.0)  # Full strength
+            cmds.connectAttr(f"{toe_mult}.outputX", f"{self.controls['toe_pivot']}.rotateX")
 
-            # Set multiplier values
-            cmds.setAttr(f"{roll_mult}.input2X", 0.1)
-            cmds.setAttr(f"{toe_mult}.input2X", 0.1)
-            cmds.setAttr(f"{heel_mult}.input2X", 0.1)
+            # Tilt - side-to-side
+            cmds.connectAttr(f"{ankle_ik_ctrl}.tilt", f"{tilt_mult}.input1Z")
+            cmds.setAttr(f"{tilt_mult}.input2Z", 1.0)  # Full strength
+            cmds.connectAttr(f"{tilt_mult}.outputZ", f"{self.controls['ball_pivot']}.rotateZ")
 
-            # Connect to foot IK rotations
-            cmds.connectAttr(f"{roll_mult}.outputX", f"{self.controls['ankle_foot_ik']}.rotateX")
-            cmds.connectAttr(f"{toe_mult}.outputX", f"{self.controls['foot_toe_ik']}.rotateX")
+            # Heel
+            heel_mult = cmds.createNode("multiplyDivide", name=f"{self.module_id}_heel_mult")
+            cmds.connectAttr(f"{ankle_ik_ctrl}.heel", f"{heel_mult}.input1Y")
+            cmds.setAttr(f"{heel_mult}.input2Y", 1.0)  # Full strength
+            cmds.connectAttr(f"{heel_mult}.outputY", f"{self.controls['heel_pivot']}.rotateY")
+
+            print(f"Set up foot roll controls for {self.module_id}")
+        else:
+            print(f"WARNING: Missing foot pivot groups for {self.module_id} - foot roll will not work")
 
         # Orient constraint for IK ankle
         cmds.orientConstraint(self.controls["ik_ankle"], self.joints["ik_ankle"], maintainOffset=True)
-
-        # Connect IK foot and toe to follow IK ankle
-        # cmds.parentConstraint(self.joints["ik_ankle"], self.joints["ik_foot"], maintainOffset=True)
-        # cmds.parentConstraint(self.joints["ik_foot"], self.joints["ik_toe"], maintainOffset=True)
 
         print("Leg controls creation complete")
 
@@ -1180,3 +1270,72 @@ class LimbModule(BaseModule):
             print(f"Successfully created final constraint: {constraint}")
         except Exception as e:
             print(f"ERROR creating constraint: {str(e)}")
+
+    def _fix_joint_orientations(self):
+        """
+        Fix joint orientations using Maya's native joint orientation tool.
+        This ensures proper X-down-the-bone, Y-up orientation for all joints.
+        Also zeroes out any transform rotations.
+        """
+        print(f"Fixing joint orientations for {self.module_id} using Maya's native tool")
+
+        # Determine which joints to orient based on limb type
+        if self.limb_type == "arm":
+            chains = [
+                ["shoulder", "elbow", "wrist", "hand"],
+                ["fk_shoulder", "fk_elbow", "fk_wrist", "fk_hand"],
+                ["ik_shoulder", "ik_elbow", "ik_wrist", "ik_hand"]
+            ]
+        else:  # leg
+            chains = [
+                ["hip", "knee", "ankle", "foot", "toe"],
+                ["fk_hip", "fk_knee", "fk_ankle", "fk_foot", "fk_toe"],
+                ["ik_hip", "ik_knee", "ik_ankle", "ik_foot", "ik_toe"]
+            ]
+
+        # Store current selection to restore later
+        current_selection = cmds.ls(selection=True)
+
+        # Process each chain
+        for chain in chains:
+            # Get valid joints from the chain
+            valid_joints = []
+            for joint_name in chain:
+                if joint_name in self.joints and cmds.objExists(self.joints[joint_name]):
+                    valid_joints.append(self.joints[joint_name])
+
+            if len(valid_joints) < 2:
+                print(f"Skipping orientation for chain {chain} (insufficient valid joints)")
+                continue
+
+            print(f"Orienting joint chain: {valid_joints}")
+
+            # Select the joints in order
+            cmds.select(clear=True)
+            cmds.select(valid_joints)
+
+            # Orient the joints using Maya's native command
+            # This sets X-down-the-bone, Y-up orientation
+            cmds.joint(edit=True,
+                       orientJoint="xyz",  # Orient with primary axis X
+                       secondaryAxisOrient="yup",  # Keep Y up
+                       children=True,  # Apply to all children
+                       zeroScaleOrient=True)  # Prevent scale from affecting orientation
+
+            # IMPORTANT: Zero out transform rotations after orientation
+            # This ensures all orientation is in jointOrient, not in rotate
+            for joint in valid_joints:
+                cmds.setAttr(f"{joint}.rotateX", 0)
+                cmds.setAttr(f"{joint}.rotateY", 0)
+                cmds.setAttr(f"{joint}.rotateZ", 0)
+
+                # Debug output
+                joint_orient = cmds.getAttr(f"{joint}.jointOrient")[0]
+                print(f"  {joint}: jointOrient = {joint_orient}")
+
+            print(f"Completed orientation for chain: {valid_joints}")
+
+        # Restore original selection
+        cmds.select(clear=True)
+        if current_selection:
+            cmds.select(current_selection)
