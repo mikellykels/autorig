@@ -20,14 +20,13 @@ CONTROL_COLORS = {
     "twist": [0.8, 0.4, 0.2]  # Orange for twist controls
 }
 
-
 def create_control(name, shape_type="circle", radius=1.0, color=None):
     """
     Create a control curve with the specified shape and settings.
 
     Args:
         name (str): Name of the control
-        shape_type (str): Type of control shape
+        shape_type (str): Type of control shape ("circle", "square", "cube", "sphere")
         radius (float): Size of the control
         color (list): RGB color for the control
 
@@ -50,6 +49,21 @@ def create_control(name, shape_type="circle", radius=1.0, color=None):
             (-1, -1, 1)
         ]
         ctrl = cmds.curve(name=name, p=[(p[0] * radius, p[1] * radius, p[2] * radius) for p in points], degree=1)
+    elif shape_type == "sphere":
+        # Create sphere using NURBS circles
+        ctrl = cmds.circle(name=name, normal=[0, 1, 0], radius=radius)[0]
+
+        # Create additional circles for the sphere
+        circle1 = cmds.circle(normal=[1, 0, 0], radius=radius)[0]
+        circle2 = cmds.circle(normal=[0, 0, 1], radius=radius)[0]
+
+        # Parent shapes to main control
+        shapes = cmds.listRelatives(circle1, shapes=True) + cmds.listRelatives(circle2, shapes=True)
+        for shape in shapes:
+            cmds.parent(shape, ctrl, shape=True, relative=True)
+
+        # Delete empty transforms
+        cmds.delete(circle1, circle2)
 
     # Set color if provided
     if color and ctrl:
@@ -65,7 +79,6 @@ def create_control(name, shape_type="circle", radius=1.0, color=None):
     ctrl_grp = cmds.group(ctrl, name=f"{name}_grp")
 
     return ctrl, ctrl_grp
-
 
 def create_guide(name, position=(0, 0, 0), parent=None):
     """
