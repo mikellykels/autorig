@@ -534,32 +534,23 @@ class LimbModule(BaseModule):
             self.controls["ik_handle"] = ik_handle
 
         # === FK CONTROLS - WITH LARGER SIZES ===
-        # Shoulder FK control
+        # Shoulder FK control - IMPORTANT: Create with normal=[1,0,0] to make circles face down X axis
         shoulder_jnt = self.joints["fk_shoulder"]
         shoulder_pos = cmds.xform(shoulder_jnt, query=True, translation=True, worldSpace=True)
         shoulder_rot = cmds.xform(shoulder_jnt, query=True, rotation=True, worldSpace=True)
 
-        # Create the control
+        # Create the control with X axis normal
         shoulder_ctrl, shoulder_grp = create_control(
             f"{self.module_id}_shoulder_fk_ctrl",
             "circle",
-            5.0,  # Larger size
-            CONTROL_COLORS["fk"]
+            7.0,  # Larger size
+            CONTROL_COLORS["fk"],
+            normal=[1, 0, 0]  # This makes the circle face along X axis
         )
 
         # Position the control
         cmds.xform(shoulder_grp, translation=shoulder_pos, worldSpace=True)
         cmds.xform(shoulder_grp, rotation=shoulder_rot, worldSpace=True)
-
-        # Rotate just the shape to point along the X axis (opening pointing down X)
-        shape_nodes = cmds.listRelatives(shoulder_ctrl, shapes=True)
-        if shape_nodes:
-            # Create a temporary group to rotate the shape without affecting the transform
-            temp_grp = cmds.group(empty=True, name="temp_rotate_grp")
-            cmds.parent(shape_nodes, temp_grp, shape=True, relative=True)
-            cmds.rotate(0, 0, 90, temp_grp, relative=True)  # Rotate around Z to make opening face X
-            cmds.parent(shape_nodes, shoulder_ctrl, shape=True, relative=True)
-            cmds.delete(temp_grp)
 
         cmds.parent(shoulder_grp, self.control_grp)
         self.controls["fk_shoulder"] = shoulder_ctrl
@@ -572,22 +563,14 @@ class LimbModule(BaseModule):
         elbow_ctrl, elbow_grp = create_control(
             f"{self.module_id}_elbow_fk_ctrl",
             "circle",
-            4.0,  # Larger size
-            CONTROL_COLORS["fk"]
+            7.0,  # Larger size
+            CONTROL_COLORS["fk"],
+            normal=[1, 0, 0]  # This makes the circle face along X axis
         )
 
         # Position the control
         cmds.xform(elbow_grp, translation=elbow_pos, worldSpace=True)
         cmds.xform(elbow_grp, rotation=elbow_rot, worldSpace=True)
-
-        # Rotate just the shape using the proper method
-        shape_nodes = cmds.listRelatives(elbow_ctrl, shapes=True)
-        if shape_nodes:
-            temp_grp = cmds.group(empty=True, name="temp_rotate_grp")
-            cmds.parent(shape_nodes, temp_grp, shape=True, relative=True)
-            cmds.rotate(0, 0, 90, temp_grp, relative=True)  # Rotate around Z to make opening face X
-            cmds.parent(shape_nodes, elbow_ctrl, shape=True, relative=True)
-            cmds.delete(temp_grp)
 
         cmds.parent(elbow_grp, self.controls["fk_shoulder"])
         self.controls["fk_elbow"] = elbow_ctrl
@@ -600,22 +583,14 @@ class LimbModule(BaseModule):
         wrist_ctrl, wrist_grp = create_control(
             f"{self.module_id}_wrist_fk_ctrl",
             "circle",
-            3.0,  # Larger size
-            CONTROL_COLORS["fk"]
+            6.0,  # Larger size
+            CONTROL_COLORS["fk"],
+            normal=[1, 0, 0]  # This makes the circle face along X axis
         )
 
         # Position the control
         cmds.xform(wrist_grp, translation=wrist_pos, worldSpace=True)
         cmds.xform(wrist_grp, rotation=wrist_rot, worldSpace=True)
-
-        # Rotate just the shape using the proper method
-        shape_nodes = cmds.listRelatives(wrist_ctrl, shapes=True)
-        if shape_nodes:
-            temp_grp = cmds.group(empty=True, name="temp_rotate_grp")
-            cmds.parent(shape_nodes, temp_grp, shape=True, relative=True)
-            cmds.rotate(0, 0, 90, temp_grp, relative=True)  # Rotate around Z to make opening face X
-            cmds.parent(shape_nodes, wrist_ctrl, shape=True, relative=True)
-            cmds.delete(temp_grp)
 
         cmds.parent(wrist_grp, self.controls["fk_elbow"])
         self.controls["fk_wrist"] = wrist_ctrl
@@ -646,12 +621,12 @@ class LimbModule(BaseModule):
         cmds.parent(wrist_ik_grp, self.control_grp)
         self.controls["ik_wrist"] = wrist_ik_ctrl
 
-        # Pole vector control - use sphere instead of square
+        # Pole vector control - use sphere
         pole_pos = cmds.xform(self.guides["pole"], query=True, translation=True, worldSpace=True)
 
         pole_ctrl, pole_grp = create_control(
             f"{self.module_id}_pole_ctrl",
-            "sphere",  # Changed to sphere
+            "sphere",  # Sphere shape
             2.5,  # Larger size
             CONTROL_COLORS["ik"]
         )
@@ -1044,13 +1019,26 @@ class LimbModule(BaseModule):
         # Get position for placement
         joint_pos = cmds.xform(self.joints[joint_to_follow], query=True, translation=True, worldSpace=True)
 
-        # Create control for the switch
-        switch_ctrl, switch_grp = create_control(
-            f"{self.module_id}_fkik_switch",
-            "square",
-            1.5,  # Size
-            [1, 1, 0]  # Yellow color
+        # Create square control with Z-up normal for proper orientation
+        # This makes the square face the Z axis by default
+        square_points = [(-1, 0, -1), (1, 0, -1), (1, 0, 1), (-1, 0, 1), (-1, 0, -1)]
+        switch_ctrl = cmds.curve(
+            name=f"{self.module_id}_fkik_switch",
+            p=[(p[0] * 1.5, p[1] * 1.5, p[2] * 1.5) for p in square_points],
+            degree=1
         )
+
+        # Apply color (yellow)
+        shapes = cmds.listRelatives(switch_ctrl, shapes=True)
+        for shape in shapes:
+            cmds.setAttr(f"{shape}.overrideEnabled", 1)
+            cmds.setAttr(f"{shape}.overrideRGBColors", 1)
+            cmds.setAttr(f"{shape}.overrideColorR", 1.0)
+            cmds.setAttr(f"{shape}.overrideColorG", 1.0)
+            cmds.setAttr(f"{shape}.overrideColorB", 0.0)
+
+        # Create group
+        switch_grp = cmds.group(switch_ctrl, name=f"{switch_ctrl}_grp")
 
         # Position the switch
         if self.limb_type == "arm":
@@ -1072,17 +1060,8 @@ class LimbModule(BaseModule):
         cmds.xform(switch_grp, translation=switch_pos, worldSpace=True)
 
         # Rotate the control to face forward (positive Z)
-        # Get the shape node properly
-        shape_nodes = cmds.listRelatives(switch_ctrl, shapes=True)
-        if shape_nodes:
-            # Create a temporary group to rotate the shape without affecting the transform
-            temp_grp = cmds.group(empty=True, name="temp_rotate_grp")
-            cmds.parent(shape_nodes, temp_grp, shape=True, relative=True)
-            cmds.rotate(90, 0, 0, temp_grp, relative=True)  # Rotate around X to make opening face Z
-            cmds.parent(shape_nodes, switch_ctrl, shape=True, relative=True)
-            cmds.delete(temp_grp)
-        else:
-            print(f"Warning: Could not find shape node for {switch_ctrl}")
+        # We need to rotate it 90 degrees around X
+        cmds.xform(switch_grp, rotation=[90, 0, 0], relative=True)
 
         cmds.parent(switch_grp, self.control_grp)
 
@@ -1094,8 +1073,22 @@ class LimbModule(BaseModule):
         # Store the switch control
         self.controls["fkik_switch"] = switch_ctrl
 
-        # Set up point constraint to follow the joint
-        cmds.pointConstraint(self.joints[joint_to_follow], switch_grp, maintainOffset=True)
+        # IMPORTANT: Make the switch follow the main binding joint
+        # First, delete any existing constraints on the switch group
+        constraints = cmds.listConnections(switch_grp, source=True, destination=True, type="constraint") or []
+        for constraint in constraints:
+            if cmds.objExists(constraint):
+                cmds.delete(constraint)
 
-        print(f"Created FK/IK switch control: {switch_ctrl}")
+        # Create a parent constraint with maintain offset
+        # This ensures the switch follows the binding joint regardless of IK/FK mode
+        # We use a parent constraint to maintain the offset position above/beside the joint
+        follow_constraint = cmds.parentConstraint(
+            self.joints[joint_to_follow],  # The main binding joint to follow
+            switch_grp,  # The switch group to be constrained
+            maintainOffset=True,  # Maintain the offset we positioned it with
+            skipRotate=["x", "y", "z"]  # Skip rotation - only follow position
+        )[0]
+
+        print(f"Created FK/IK switch control: {switch_ctrl} with follow constraint: {follow_constraint}")
         return switch_ctrl

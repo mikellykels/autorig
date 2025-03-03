@@ -20,7 +20,8 @@ CONTROL_COLORS = {
     "twist": [0.8, 0.4, 0.2]  # Orange for twist controls
 }
 
-def create_control(name, shape_type="circle", radius=1.0, color=None):
+
+def create_control(name, shape_type="circle", radius=1.0, color=None, normal=None):
     """
     Create a control curve with the specified shape and settings.
 
@@ -29,6 +30,7 @@ def create_control(name, shape_type="circle", radius=1.0, color=None):
         shape_type (str): Type of control shape ("circle", "square", "cube", "sphere")
         radius (float): Size of the control
         color (list): RGB color for the control
+        normal (list): Normal direction for circle controls [x,y,z]
 
     Returns:
         tuple(str, str): Name of created control and its group
@@ -36,7 +38,11 @@ def create_control(name, shape_type="circle", radius=1.0, color=None):
     ctrl = None
 
     if shape_type == "circle":
-        ctrl = cmds.circle(name=name, normal=[0, 1, 0], radius=radius)[0]
+        # If normal is provided, use it, otherwise default to Y-up
+        if normal is None:
+            normal = [0, 1, 0]  # Default Y-up
+
+        ctrl = cmds.circle(name=name, normal=normal, radius=radius)[0]
     elif shape_type == "square":
         points = [(-1, 0, -1), (1, 0, -1), (1, 0, 1), (-1, 0, 1), (-1, 0, -1)]
         ctrl = cmds.curve(name=name, p=[(p[0] * radius, p[1] * radius, p[2] * radius) for p in points], degree=1)
