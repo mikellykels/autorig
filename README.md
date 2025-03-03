@@ -1,6 +1,6 @@
 # Modular Auto-Rig System
 
-A modular character rigging system for Maya that streamlines the rigging process through reusable components and a guide-based workflow.
+[WIP] A modular character rigging system for Maya that streamlines the rigging process through reusable components and a guide-based workflow.
 
 ## Features
 
