@@ -181,6 +181,8 @@ class LimbModule(BaseModule):
         # Setup FK/IK blending
         self._setup_ikfk_blending()
 
+        self._finalize_fkik_switch()
+
         print(f"Build complete for {self.module_id}")
 
     def _create_joints(self):
@@ -694,26 +696,18 @@ class LimbModule(BaseModule):
         hip_pos = cmds.xform(hip_jnt, query=True, translation=True, worldSpace=True)
         hip_rot = cmds.xform(hip_jnt, query=True, rotation=True, worldSpace=True)
 
-        # Create the control
+        # Create the control with X axis normal - same approach as arm FK controls
         hip_ctrl, hip_grp = create_control(
             f"{self.module_id}_hip_fk_ctrl",
             "circle",
-            5.0,  # Larger size
-            CONTROL_COLORS["fk"]
+            10.0,  # Larger size
+            CONTROL_COLORS["fk"],
+            normal=[1, 0, 0]  # This makes the circle face along X axis
         )
 
         # Position the control
         cmds.xform(hip_grp, translation=hip_pos, worldSpace=True)
         cmds.xform(hip_grp, rotation=hip_rot, worldSpace=True)
-
-        # Rotate just the shape to point along the X axis
-        shape_nodes = cmds.listRelatives(hip_ctrl, shapes=True)
-        if shape_nodes:
-            temp_grp = cmds.group(empty=True, name="temp_rotate_grp")
-            cmds.parent(shape_nodes, temp_grp, shape=True, relative=True)
-            cmds.rotate(0, 0, 90, temp_grp, relative=True)  # Rotate around Z to make opening face X
-            cmds.parent(shape_nodes, hip_ctrl, shape=True, relative=True)
-            cmds.delete(temp_grp)
 
         cmds.parent(hip_grp, self.control_grp)
         self.controls["fk_hip"] = hip_ctrl
@@ -726,22 +720,14 @@ class LimbModule(BaseModule):
         knee_ctrl, knee_grp = create_control(
             f"{self.module_id}_knee_fk_ctrl",
             "circle",
-            4.0,  # Larger size
-            CONTROL_COLORS["fk"]
+            7.0,  # Larger size
+            CONTROL_COLORS["fk"],
+            normal=[1, 0, 0]  # This makes the circle face along X axis
         )
 
         # Position the control
         cmds.xform(knee_grp, translation=knee_pos, worldSpace=True)
         cmds.xform(knee_grp, rotation=knee_rot, worldSpace=True)
-
-        # Rotate just the shape
-        shape_nodes = cmds.listRelatives(knee_ctrl, shapes=True)
-        if shape_nodes:
-            temp_grp = cmds.group(empty=True, name="temp_rotate_grp")
-            cmds.parent(shape_nodes, temp_grp, shape=True, relative=True)
-            cmds.rotate(0, 0, 90, temp_grp, relative=True)  # Rotate around Z to make opening face X
-            cmds.parent(shape_nodes, knee_ctrl, shape=True, relative=True)
-            cmds.delete(temp_grp)
 
         cmds.parent(knee_grp, self.controls["fk_hip"])
         self.controls["fk_knee"] = knee_ctrl
@@ -754,22 +740,14 @@ class LimbModule(BaseModule):
         ankle_ctrl, ankle_grp = create_control(
             f"{self.module_id}_ankle_fk_ctrl",
             "circle",
-            3.0,  # Larger size
-            CONTROL_COLORS["fk"]
+            5.0,  # Larger size
+            CONTROL_COLORS["fk"],
+            normal=[1, 0, 0]  # This makes the circle face along X axis
         )
 
         # Position the control
         cmds.xform(ankle_grp, translation=ankle_pos, worldSpace=True)
         cmds.xform(ankle_grp, rotation=ankle_rot, worldSpace=True)
-
-        # Rotate just the shape
-        shape_nodes = cmds.listRelatives(ankle_ctrl, shapes=True)
-        if shape_nodes:
-            temp_grp = cmds.group(empty=True, name="temp_rotate_grp")
-            cmds.parent(shape_nodes, temp_grp, shape=True, relative=True)
-            cmds.rotate(0, 0, 90, temp_grp, relative=True)  # Rotate around Z to make opening face X
-            cmds.parent(shape_nodes, ankle_ctrl, shape=True, relative=True)
-            cmds.delete(temp_grp)
 
         cmds.parent(ankle_grp, self.controls["fk_knee"])
         self.controls["fk_ankle"] = ankle_ctrl
@@ -866,8 +844,8 @@ class LimbModule(BaseModule):
         cmds.orientConstraint(self.controls["ik_ankle"], self.joints["ik_ankle"], maintainOffset=True)
 
         # Connect IK foot and toe to follow IK ankle
-        cmds.parentConstraint(self.joints["ik_ankle"], self.joints["ik_foot"], maintainOffset=True)
-        cmds.parentConstraint(self.joints["ik_foot"], self.joints["ik_toe"], maintainOffset=True)
+        # cmds.parentConstraint(self.joints["ik_ankle"], self.joints["ik_foot"], maintainOffset=True)
+        # cmds.parentConstraint(self.joints["ik_foot"], self.joints["ik_toe"], maintainOffset=True)
 
         print("Leg controls creation complete")
 
@@ -878,12 +856,29 @@ class LimbModule(BaseModule):
         """
         print(f"Setting up FK/IK blending for {self.module_id}")
 
+        # Determine which joints to blend based on limb type
+        if self.limb_type == "arm":
+            joint_pairs = [
+                ("shoulder", "ik_shoulder", "fk_shoulder"),
+                ("elbow", "ik_elbow", "fk_elbow"),
+                ("wrist", "ik_wrist", "fk_wrist"),
+                ("hand", "ik_hand", "fk_hand")
+            ]
+        else:  # leg
+            joint_pairs = [
+                ("hip", "ik_hip", "fk_hip"),
+                ("knee", "ik_knee", "fk_knee"),
+                ("ankle", "ik_ankle", "fk_ankle"),
+                ("foot", "ik_foot", "fk_foot"),
+                ("toe", "ik_toe", "fk_toe")
+            ]
+
         # First, remove any existing constraints on binding joints
-        for joint_name in ["shoulder", "elbow", "wrist", "hand"]:
-            if joint_name not in self.joints:
+        for bind_joint, _, _ in joint_pairs:
+            if bind_joint not in self.joints:
                 continue
 
-            joint = self.joints[joint_name]
+            joint = self.joints[bind_joint]
             constraints = cmds.listConnections(joint, source=True, destination=True, type="constraint") or []
             for constraint in constraints:
                 if cmds.objExists(constraint):
@@ -892,7 +887,7 @@ class LimbModule(BaseModule):
         # Get the FK/IK switch control
         switch_ctrl = self.controls.get("fkik_switch")
         if not switch_ctrl:
-            print("Warning: No FK/IK switch control found")
+            print(f"Warning: No FK/IK switch control found for {self.module_id}")
             return
 
         # Create a reverse node for the switch
@@ -900,13 +895,6 @@ class LimbModule(BaseModule):
         cmds.connectAttr(f"{switch_ctrl}.FkIkBlend", f"{reverse_node}.inputX")
 
         # Set up constraints for each joint
-        joint_pairs = [
-            ("shoulder", "ik_shoulder", "fk_shoulder"),
-            ("elbow", "ik_elbow", "fk_elbow"),
-            ("wrist", "ik_wrist", "fk_wrist"),
-            ("hand", "ik_hand", "fk_hand")
-        ]
-
         for bind_joint, ik_joint, fk_joint in joint_pairs:
             if bind_joint not in self.joints or ik_joint not in self.joints or fk_joint not in self.joints:
                 print(f"Warning: Missing joint for {bind_joint} blending")
@@ -926,35 +914,58 @@ class LimbModule(BaseModule):
                 print(f"Warning: Expected 2 weights for {constraint}, got {len(weights)}")
                 continue
 
-            # Connect weights:
-            # - 0 = FK, so connect the reverse of FkIkBlend to the IK weight (to make it 0)
-            # - 1 = IK, so connect FkIkBlend directly to the FK weight (to make it 1)
-            cmds.connectAttr(f"{switch_ctrl}.FkIkBlend", f"{constraint}.{weights[0]}")  # IK weight
-            cmds.connectAttr(f"{reverse_node}.outputX", f"{constraint}.{weights[1]}")  # FK weight
+            # Connect weights properly:
+            # - For IK weight (index 0): Connect directly to the FkIkBlend attribute
+            cmds.connectAttr(f"{switch_ctrl}.FkIkBlend", f"{constraint}.{weights[0]}")
 
-        # Set up visibility for controls based on FK/IK blend
-        # Make sure to get FK joints visibility fixed
+            # - For FK weight (index 1): Connect to the reverse node output
+            cmds.connectAttr(f"{reverse_node}.outputX", f"{constraint}.{weights[1]}")
 
-        # FK controls visible when blend = 0 (use reverse)
-        for ctrl_name in ["fk_shoulder", "fk_elbow", "fk_wrist"]:
+        # Set up visibility control for FK and IK controls
+        # Define all control groups to toggle visibility
+        if self.limb_type == "arm":
+            fk_controls = ["fk_shoulder", "fk_elbow", "fk_wrist"]
+            ik_controls = ["ik_wrist", "pole"]
+        else:  # leg
+            fk_controls = ["fk_hip", "fk_knee", "fk_ankle"]
+            ik_controls = ["ik_ankle", "pole"]
+
+        # FK controls visible when FkIkBlend is 0 (reverse output is 1)
+        for ctrl_name in fk_controls:
             if ctrl_name in self.controls:
-                cmds.setAttr(f"{self.controls[ctrl_name]}.visibility", 1)  # Start visible
+                # Disconnect any existing connections to visibility
+                connections = cmds.listConnections(f"{self.controls[ctrl_name]}.visibility",
+                                                   source=True, destination=False, plugs=True) or []
+                for connection in connections:
+                    cmds.disconnectAttr(connection, f"{self.controls[ctrl_name]}.visibility")
+
+                # Make sure visibility is on
+                cmds.setAttr(f"{self.controls[ctrl_name]}.visibility", 1)
+
+                # Connect reverse node to visibility (so 0 blend = visible FK)
                 cmds.connectAttr(f"{reverse_node}.outputX", f"{self.controls[ctrl_name]}.visibility")
 
-        # IK controls visible when blend = 1 (use direct connection)
-        for ctrl_name in ["ik_wrist", "pole"]:
+        # IK controls visible when FkIkBlend is 1 (direct connection)
+        for ctrl_name in ik_controls:
             if ctrl_name in self.controls:
+                # Disconnect any existing connections to visibility
+                connections = cmds.listConnections(f"{self.controls[ctrl_name]}.visibility",
+                                                   source=True, destination=False, plugs=True) or []
+                for connection in connections:
+                    cmds.disconnectAttr(connection, f"{self.controls[ctrl_name]}.visibility")
+
+                # Make sure visibility is on
                 cmds.setAttr(f"{self.controls[ctrl_name]}.visibility", 0)  # Start invisible
+
+                # Connect switch directly to visibility (so 1 blend = visible IK)
                 cmds.connectAttr(f"{switch_ctrl}.FkIkBlend", f"{self.controls[ctrl_name]}.visibility")
 
-        # Now fix the FK/IK joint visibility
-        # For demonstration purposes, hide the IK and FK joints completely
-        # Only the binding joints should be visible
+        # Hide IK and FK joints (keep only the binding joints visible)
         for prefix in ["ik_", "fk_"]:
-            for suffix in ["shoulder", "elbow", "wrist", "hand"]:
-                joint_name = f"{prefix}{suffix}"
-                if joint_name in self.joints:
-                    cmds.setAttr(f"{self.joints[joint_name]}.visibility", 0)
+            for joint_name in [pair[0] for pair in joint_pairs]:
+                joint_key = f"{prefix}{joint_name}"
+                if joint_key in self.joints:
+                    cmds.setAttr(f"{self.joints[joint_key]}.visibility", 0)
 
         print("FK/IK blending setup complete")
 
@@ -1016,8 +1027,12 @@ class LimbModule(BaseModule):
             print(f"Warning: '{joint_to_follow}' joint not found for FKIK switch")
             return None
 
+        # Store the actual joint to follow
+        follow_joint = self.joints[joint_to_follow]
+        print(f"Using joint '{follow_joint}' for FKIK switch to follow")
+
         # Get position for placement
-        joint_pos = cmds.xform(self.joints[joint_to_follow], query=True, translation=True, worldSpace=True)
+        joint_pos = cmds.xform(follow_joint, query=True, translation=True, worldSpace=True)
 
         # Create square control with Z-up normal for proper orientation
         # This makes the square face the Z axis by default
@@ -1074,21 +1089,94 @@ class LimbModule(BaseModule):
         self.controls["fkik_switch"] = switch_ctrl
 
         # IMPORTANT: Make the switch follow the main binding joint
-        # First, delete any existing constraints on the switch group
+        # First, check if there are any existing constraints and delete them
         constraints = cmds.listConnections(switch_grp, source=True, destination=True, type="constraint") or []
         for constraint in constraints:
             if cmds.objExists(constraint):
+                print(f"Deleting existing constraint: {constraint}")
                 cmds.delete(constraint)
 
-        # Create a parent constraint with maintain offset
-        # This ensures the switch follows the binding joint regardless of IK/FK mode
-        # We use a parent constraint to maintain the offset position above/beside the joint
-        follow_constraint = cmds.parentConstraint(
-            self.joints[joint_to_follow],  # The main binding joint to follow
-            switch_grp,  # The switch group to be constrained
-            maintainOffset=True,  # Maintain the offset we positioned it with
-            skipRotate=["x", "y", "z"]  # Skip rotation - only follow position
-        )[0]
+        # Create a point constraint explicitly using the joint object, not the dictionary key
+        # This ensures the constraint is created even if there are lookup issues
+        print(f"Creating point constraint from {follow_joint} to {switch_grp}")
+        try:
+            follow_constraint = cmds.pointConstraint(
+                follow_joint,  # Use the actual joint object
+                switch_grp,  # The switch group to be constrained
+                maintainOffset=True,
+                name=f"{switch_grp}_pointConstraint"
+            )[0]
 
-        print(f"Created FK/IK switch control: {switch_ctrl} with follow constraint: {follow_constraint}")
+            # Verify the constraint was created
+            if cmds.objExists(follow_constraint):
+                print(f"Successfully created constraint: {follow_constraint}")
+            else:
+                print(f"ERROR: Failed to create constraint!")
+        except Exception as e:
+            print(f"ERROR creating constraint: {str(e)}")
+
+        # Double-check that constraint exists
+        new_constraints = cmds.listConnections(switch_grp, source=True, destination=False, type="constraint") or []
+        if new_constraints:
+            print(f"Verified constraints after creation: {new_constraints}")
+        else:
+            print(f"WARNING: No constraints found after creation attempt!")
+
         return switch_ctrl
+
+    def _finalize_fkik_switch(self):
+        """Ensure the FKIK switch properly follows the main joint.
+        This method should be called at the very end of the build process.
+        """
+        # Check if FKIK switch exists
+        if "fkik_switch" not in self.controls:
+            print(f"Warning: No FKIK switch found for {self.module_id}")
+            return
+
+        switch_ctrl = self.controls["fkik_switch"]
+        switch_grp = f"{switch_ctrl}_grp"
+
+        if not cmds.objExists(switch_grp):
+            print(f"Warning: FKIK switch group {switch_grp} does not exist")
+            return
+
+        # Determine the joint to follow
+        if self.limb_type == "arm":
+            joint_to_follow = "wrist"
+        else:  # leg
+            joint_to_follow = "ankle"
+
+        if joint_to_follow not in self.joints:
+            print(f"Warning: {joint_to_follow} joint not found for {self.module_id}")
+            return
+
+        follow_joint = self.joints[joint_to_follow]
+
+        print(f"Finalizing FKIK switch connection for {self.module_id}")
+
+        # Delete any existing constraints on the switch group
+        # Use listRelatives to find constraints directly, more reliable than listConnections
+        constraints = cmds.listRelatives(switch_grp, type="constraint") or []
+        for constraint in constraints:
+            print(f"Removing existing constraint: {constraint}")
+            cmds.delete(constraint)
+
+        # Use parentConstraint but skip rotate to only follow position
+        # This is more reliable than pointConstraint in some situations
+        print(f"Creating final constraint from {follow_joint} to {switch_grp}")
+        try:
+            constraint = cmds.parentConstraint(
+                follow_joint,
+                switch_grp,
+                maintainOffset=True,
+                skipRotate=["x", "y", "z"],  # Skip rotation - only follow position
+                weight=1.0,  # Ensure full weight
+                name=f"{switch_grp}_finalConstraint"
+            )[0]
+
+            # Set high constraint priority to ensure it's evaluated last
+            cmds.setAttr(f"{constraint}.interpType", 2)  # No flip
+
+            print(f"Successfully created final constraint: {constraint}")
+        except Exception as e:
+            print(f"ERROR creating constraint: {str(e)}")
