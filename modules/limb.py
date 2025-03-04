@@ -1314,28 +1314,28 @@ class LimbModule(BaseModule):
             cmds.select(clear=True)
             cmds.select(valid_joints)
 
-            # Orient the joints using Maya's native command
-            # This sets X-down-the-bone, Y-up orientation
-            cmds.joint(edit=True,
-                       orientJoint="xyz",  # Orient with primary axis X
-                       secondaryAxisOrient="yup",  # Keep Y up
-                       children=True,  # Apply to all children
-                       zeroScaleOrient=True)  # Prevent scale from affecting orientation
+            # Orient joints using Maya's native command
+            cmds.joint(
+                edit=True,
+                orientJoint="xyz",  # Primary axis X
+                secondaryAxisOrient="yup",  # Secondary axis Y
+                children=True,  # Apply to all children
+                zeroScaleOrient=True  # Prevent scale from affecting orientation
+            )
 
-            # IMPORTANT: Zero out transform rotations after orientation
-            # This ensures all orientation is in jointOrient, not in rotate
+            # Zero out transform rotations for all joints in the chain
             for joint in valid_joints:
                 cmds.setAttr(f"{joint}.rotateX", 0)
                 cmds.setAttr(f"{joint}.rotateY", 0)
                 cmds.setAttr(f"{joint}.rotateZ", 0)
 
-                # Debug output
+                # Print out the resulting joint orient for debugging
                 joint_orient = cmds.getAttr(f"{joint}.jointOrient")[0]
-                print(f"  {joint}: jointOrient = {joint_orient}")
-
-            print(f"Completed orientation for chain: {valid_joints}")
+                print(f"  {joint} joint orientation: {joint_orient}")
 
         # Restore original selection
         cmds.select(clear=True)
         if current_selection:
             cmds.select(current_selection)
+
+        print("Joint orientation fix complete")
