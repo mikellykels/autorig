@@ -844,6 +844,19 @@ class LimbModule(BaseModule):
         cmds.parent(ankle_ik_grp, self.control_grp)
         self.controls["ik_ankle"] = ankle_ik_ctrl
 
+        # IMPORTANT: Connect the ankle IK control to the foot roll group
+        if "foot_roll_grp" in self.controls and cmds.objExists(self.controls["foot_roll_grp"]):
+            print(f"Connecting ankle IK control to foot roll system")
+            # Parent constraint to ensure the foot roll group follows the ankle control
+            cmds.parentConstraint(
+                self.controls["ik_ankle"],
+                self.controls["foot_roll_grp"],
+                maintainOffset=True,
+                name=f"{self.module_id}_footRoll_parentConstraint"
+            )
+        else:
+            print(f"WARNING: Could not find foot roll group to connect to ankle IK control")
+
         # Add foot attributes
         for attr_name in ["roll", "tilt", "toe", "heel"]:
             if not cmds.attributeQuery(attr_name, node=ankle_ik_ctrl, exists=True):
@@ -881,56 +894,97 @@ class LimbModule(BaseModule):
         if all(key in self.controls for key in ["heel_pivot", "toe_pivot", "ball_pivot", "ankle_pivot"]):
             print(f"Setting up foot roll connections for {self.module_id}")
 
-            # Create utility nodes for foot attributes
-            roll_cond = cmds.createNode("condition", name=f"{self.module_id}_roll_condition")
+            # --- IMPROVED FOOT ROLL SYSTEM ---
+            # Define our roll stages and thresholds
+            ball_roll_threshold = 30.0  # Degrees before toe starts to bend
 
-            # Roll: +value = ball pivot (toe up), -value = heel pivot (heel up)
-            cmds.setAttr(f"{roll_cond}.operation", 2)  # Greater than
-            cmds.setAttr(f"{roll_cond}.colorIfFalseR", 0)
-            cmds.setAttr(f"{roll_cond}.secondTerm", 0)
+            # Create utility nodes for advanced foot roll
 
-            # Toe pivot
-            toe_mult = cmds.createNode("multiplyDivide", name=f"{self.module_id}_toe_mult")
+            # 1. HEEL ROLL (NEGATIVE VALUES)
+            # Simple - just connect negative values to heel pivot
+            heel_cond = cmds.createNode("condition", name=f"{self.module_id}_heel_condition")
+            cmds.setAttr(f"{heel_cond}.operation", 4)  # Less than
+            cmds.setAttr(f"{heel_cond}.colorIfFalseR", 0)  # Use 0 if roll is >= 0
+            cmds.setAttr(f"{heel_cond}.secondTerm", 0)  # Compare to 0
 
-            # Tilt: side-to-side rotation
-            tilt_mult = cmds.createNode("multiplyDivide", name=f"{self.module_id}_tilt_mult")
+            # Connect roll attribute to condition node
+            cmds.connectAttr(f"{ankle_ik_ctrl}.roll", f"{heel_cond}.firstTerm")
 
-            # Connect attributes
-            # Roll - for positive values (toe up)
-            cmds.connectAttr(f"{ankle_ik_ctrl}.roll", f"{roll_cond}.firstTerm")
-            cmds.connectAttr(f"{ankle_ik_ctrl}.roll", f"{roll_cond}.colorIfTrueR")
-            cmds.connectAttr(f"{roll_cond}.outColorR", f"{self.controls['ball_pivot']}.rotateX")
-
-            # Roll - for negative values (heel up)
+            # For negative values (heel roll), use the negative roll value directly
             neg_roll = cmds.createNode("multiplyDivide", name=f"{self.module_id}_neg_roll_mult")
             cmds.setAttr(f"{neg_roll}.input2X", -1)  # Negate the value
             cmds.connectAttr(f"{ankle_ik_ctrl}.roll", f"{neg_roll}.input1X")
-
-            heel_cond = cmds.createNode("condition", name=f"{self.module_id}_heel_condition")
-            cmds.setAttr(f"{heel_cond}.operation", 4)  # Less than
-            cmds.setAttr(f"{heel_cond}.colorIfFalseR", 0)
-            cmds.setAttr(f"{heel_cond}.secondTerm", 0)
-            cmds.connectAttr(f"{ankle_ik_ctrl}.roll", f"{heel_cond}.firstTerm")
             cmds.connectAttr(f"{neg_roll}.outputX", f"{heel_cond}.colorIfTrueR")
+
+            # Connect result to heel pivot
             cmds.connectAttr(f"{heel_cond}.outColorR", f"{self.controls['heel_pivot']}.rotateX")
 
-            # Toe
-            cmds.connectAttr(f"{ankle_ik_ctrl}.toe", f"{toe_mult}.input1X")
-            cmds.setAttr(f"{toe_mult}.input2X", 1.0)  # Full strength
-            cmds.connectAttr(f"{toe_mult}.outputX", f"{self.controls['toe_pivot']}.rotateX")
+            # 2. BALL ROLL (0 to threshold) - The foot rolls forward at the ball
+            ball_cond = cmds.createNode("condition", name=f"{self.module_id}_ball_condition")
+            cmds.setAttr(f"{ball_cond}.operation", 2)  # Greater than
+            cmds.setAttr(f"{ball_cond}.secondTerm", 0)  # Compare to 0
 
-            # Tilt - side-to-side
+            # Create a clamp for the ball roll (0 to threshold)
+            ball_clamp = cmds.createNode("clamp", name=f"{self.module_id}_ball_clamp")
+            cmds.setAttr(f"{ball_clamp}.minR", 0)
+            cmds.setAttr(f"{ball_clamp}.maxR", ball_roll_threshold)
+
+            # Connect roll attribute to condition and clamp
+            cmds.connectAttr(f"{ankle_ik_ctrl}.roll", f"{ball_cond}.firstTerm")
+            cmds.connectAttr(f"{ankle_ik_ctrl}.roll", f"{ball_clamp}.inputR")
+
+            # Connect clamped output as the colorIfTrue for the condition
+            cmds.connectAttr(f"{ball_clamp}.outputR", f"{ball_cond}.colorIfTrueR")
+            cmds.setAttr(f"{ball_cond}.colorIfFalseR", 0)  # 0 if roll <= 0
+
+            # Connect result to ball pivot
+            cmds.connectAttr(f"{ball_cond}.outColorR", f"{self.controls['ball_pivot']}.rotateX")
+
+            # 3. TOE ROLL (beyond threshold) - Only bend toes if roll > threshold
+            toe_cond = cmds.createNode("condition", name=f"{self.module_id}_toe_condition")
+            cmds.setAttr(f"{toe_cond}.operation", 2)  # Greater than
+            cmds.setAttr(f"{toe_cond}.secondTerm", ball_roll_threshold)  # Compare to threshold
+
+            # Connect roll attribute to condition
+            cmds.connectAttr(f"{ankle_ik_ctrl}.roll", f"{toe_cond}.firstTerm")
+
+            # For roll values > threshold, use (roll - threshold)
+            toe_offset = cmds.createNode("plusMinusAverage", name=f"{self.module_id}_toe_offset")
+            cmds.setAttr(f"{toe_offset}.operation", 2)  # Subtract
+            cmds.connectAttr(f"{ankle_ik_ctrl}.roll", f"{toe_offset}.input1D[0]")
+            cmds.setAttr(f"{toe_offset}.input1D[1]", ball_roll_threshold)
+
+            # Connect the result as the colorIfTrue for the condition
+            cmds.connectAttr(f"{toe_offset}.output1D", f"{toe_cond}.colorIfTrueR")
+            cmds.setAttr(f"{toe_cond}.colorIfFalseR", 0)  # 0 if roll <= threshold
+
+            # 4. TOE MANUAL CONTROL - Connect separate toe attribute
+            # Create a plusMinusAverage node to combine auto roll toe effect and manual toe control
+            toe_combine = cmds.createNode("plusMinusAverage", name=f"{self.module_id}_toe_combine")
+            cmds.setAttr(f"{toe_combine}.operation", 1)  # Add
+
+            # Connect the automatic toe roll (from condition) to the first input
+            cmds.connectAttr(f"{toe_cond}.outColorR", f"{toe_combine}.input1D[0]")
+
+            # Connect the manual toe attribute directly to the second input
+            cmds.connectAttr(f"{ankle_ik_ctrl}.toe", f"{toe_combine}.input1D[1]")
+
+            # Connect the combined result to the toe pivot
+            cmds.connectAttr(f"{toe_combine}.output1D", f"{self.controls['toe_pivot']}.rotateX")
+
+            # 5. TILT - Side-to-side rotation (unchanged)
+            tilt_mult = cmds.createNode("multiplyDivide", name=f"{self.module_id}_tilt_mult")
             cmds.connectAttr(f"{ankle_ik_ctrl}.tilt", f"{tilt_mult}.input1Z")
             cmds.setAttr(f"{tilt_mult}.input2Z", 1.0)  # Full strength
             cmds.connectAttr(f"{tilt_mult}.outputZ", f"{self.controls['ball_pivot']}.rotateZ")
 
-            # Heel
+            # 6. HEEL Y ROTATION - For heel twist (unchanged)
             heel_mult = cmds.createNode("multiplyDivide", name=f"{self.module_id}_heel_mult")
             cmds.connectAttr(f"{ankle_ik_ctrl}.heel", f"{heel_mult}.input1Y")
             cmds.setAttr(f"{heel_mult}.input2Y", 1.0)  # Full strength
             cmds.connectAttr(f"{heel_mult}.outputY", f"{self.controls['heel_pivot']}.rotateY")
 
-            print(f"Set up foot roll controls for {self.module_id}")
+            print(f"Set up improved foot roll controls for {self.module_id}")
         else:
             print(f"WARNING: Missing foot pivot groups for {self.module_id} - foot roll will not work")
 
@@ -1318,26 +1372,10 @@ class LimbModule(BaseModule):
                 else:
                     current_section.append(joint_obj)
 
-            # DEBUG: Print the sections we identified
-            print(f"Chain sections for {chain}:")
-            print(f"  Pre-{middle_joint_type}: {pre_middle}")
-            print(f"  {middle_joint_type}: {middle}")
-            print(f"  Post-{middle_joint_type}: {post_middle}")
-
             # Skip if we don't have enough joints
             if not middle or not pre_middle or not post_middle:
                 print(f"  Missing required joints - skipping chain: {chain}")
                 continue
-
-            # DEBUG: Print positions
-            for section_name, joints in [
-                (f"Pre-{middle_joint_type}", pre_middle),
-                (f"{middle_joint_type}", [middle]),
-                (f"Post-{middle_joint_type}", post_middle)
-            ]:
-                for j in joints:
-                    pos = cmds.xform(j, query=True, translation=True, worldSpace=True)
-                    print(f"  Position of {j} ({section_name}): {pos}")
 
             # Analyze the bend to determine appropriate orientation
             import math
@@ -1352,10 +1390,6 @@ class LimbModule(BaseModule):
             # Calculate magnitudes
             mag1 = math.sqrt(sum(c * c for c in v1))
             mag2 = math.sqrt(sum(c * c for c in v2))
-
-            # DEBUG: Print vectors and magnitudes
-            print(f"  Vector from {pre_middle[-1]} to {middle}: {v1} (mag: {mag1})")
-            print(f"  Vector from {middle} to {post_middle[0]}: {v2} (mag: {mag2})")
 
             # Default orientation - will be updated based on analysis
             middle_orientation = "yup"
@@ -1373,32 +1407,20 @@ class LimbModule(BaseModule):
                 # Calculate Y component of direction change
                 y_bend = v2[1] / mag2 if mag2 > 0 else 0
 
-                print(f"  Bend angle at {middle}: {angle_deg:.2f} degrees")
-                print(f"  Dot product: {dot}")
-                print(f"  Y direction bend: {y_bend}")
-
                 # DIFFERENT CRITERIA FOR KNEES VS ELBOWS
                 if middle_joint_type == 'knee':
                     # For KNEES: Use ydown when there's significant negative Y bend
-                    # This is common in character leg poses even with modest bend angles
                     if y_bend < -0.5:  # This threshold catches stronger downward bends
                         middle_orientation = "ydown"
-                        print(f"  Using orientation: ydown (knee with downward bend)")
-                    else:
-                        print(f"  Using orientation: yup (knee not bending significantly downward)")
                 else:  # elbow
                     # For ELBOWS: Only use ydown with extreme bends
                     if angle_deg > 30 and y_bend < -0.3:
                         middle_orientation = "ydown"
-                        print(f"  Using orientation: ydown (extremely bent elbow)")
-                    else:
-                        print(f"  Using orientation: yup (elbow not extremely bent)")
 
             # 1. Orient the parent to the middle joint
             if pre_middle and middle:
                 cmds.select(clear=True)
                 cmds.select(pre_middle[-1], middle)
-                print(f"  Orienting {pre_middle[-1]} to {middle} with yup")
                 cmds.joint(
                     edit=True,
                     orientJoint="xyz",
@@ -1410,7 +1432,6 @@ class LimbModule(BaseModule):
             if middle and post_middle:
                 cmds.select(clear=True)
                 cmds.select(middle, post_middle[0])
-                print(f"  Orienting {middle} to {post_middle[0]} with {middle_orientation}")
                 cmds.joint(
                     edit=True,
                     orientJoint="xyz",
@@ -1422,7 +1443,6 @@ class LimbModule(BaseModule):
             if len(post_middle) > 1:
                 cmds.select(clear=True)
                 cmds.select(post_middle)
-                print(f"  Orienting remaining chain: {post_middle}")
                 cmds.joint(
                     edit=True,
                     orientJoint="xyz",
@@ -1438,10 +1458,6 @@ class LimbModule(BaseModule):
                         cmds.setAttr(f"{joint}.rotateX", 0)
                         cmds.setAttr(f"{joint}.rotateY", 0)
                         cmds.setAttr(f"{joint}.rotateZ", 0)
-
-                        # DEBUG: Print final orientation
-                        orient = cmds.getAttr(f"{joint}.jointOrient")[0]
-                        print(f"  Final {joint} orientation: {orient}")
                     except Exception as e:
                         print(f"  Error zeroing rotations for {joint}: {str(e)}")
 
