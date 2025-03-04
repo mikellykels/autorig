@@ -1274,64 +1274,176 @@ class LimbModule(BaseModule):
     def _fix_joint_orientations(self):
         """
         Fix joint orientations using Maya's native joint orientation tool.
-        This ensures proper X-down-the-bone, Y-up orientation for all joints.
-        Also zeroes out any transform rotations.
+        Uses different orientation strategies for knees vs elbows.
         """
-        print(f"Fixing joint orientations for {self.module_id} using Maya's native tool")
-
-        # Determine which joints to orient based on limb type
-        if self.limb_type == "arm":
-            chains = [
-                ["shoulder", "elbow", "wrist", "hand"],
-                ["fk_shoulder", "fk_elbow", "fk_wrist", "fk_hand"],
-                ["ik_shoulder", "ik_elbow", "ik_wrist", "ik_hand"]
-            ]
-        else:  # leg
-            chains = [
-                ["hip", "knee", "ankle", "foot", "toe"],
-                ["fk_hip", "fk_knee", "fk_ankle", "fk_foot", "fk_toe"],
-                ["ik_hip", "ik_knee", "ik_ankle", "ik_foot", "ik_toe"]
-            ]
+        print(f"Fixing joint orientations for {self.module_id}")
 
         # Store current selection to restore later
         current_selection = cmds.ls(selection=True)
 
-        # Process each chain
-        for chain in chains:
-            # Get valid joints from the chain
-            valid_joints = []
-            for joint_name in chain:
-                if joint_name in self.joints and cmds.objExists(self.joints[joint_name]):
-                    valid_joints.append(self.joints[joint_name])
+        # Determine which joints to orient based on limb type
+        if self.limb_type == "arm":
+            joint_chains = [
+                ["shoulder", "elbow", "wrist", "hand"],
+                ["fk_shoulder", "fk_elbow", "fk_wrist", "fk_hand"],
+                ["ik_shoulder", "ik_elbow", "ik_wrist", "ik_hand"]
+            ]
+            middle_joint_type = "elbow"
+        else:  # leg
+            joint_chains = [
+                ["hip", "knee", "ankle", "foot", "toe"],
+                ["fk_hip", "fk_knee", "fk_ankle", "fk_foot", "fk_toe"],
+                ["ik_hip", "ik_knee", "ik_ankle", "ik_foot", "ik_toe"]
+            ]
+            middle_joint_type = "knee"
 
-            if len(valid_joints) < 2:
-                print(f"Skipping orientation for chain {chain} (insufficient valid joints)")
+        # Process each chain type (main, FK, IK)
+        for chain in joint_chains:
+            # Split the chain into sections for orientation treatment
+            pre_middle = []  # Joints before the middle joint
+            middle = None  # The middle joint (knee/elbow)
+            post_middle = []  # Joints after the middle joint
+
+            current_section = pre_middle
+            for joint_name in chain:
+                if joint_name not in self.joints or not cmds.objExists(self.joints[joint_name]):
+                    continue
+
+                joint_obj = self.joints[joint_name]
+
+                # Determine which section this joint belongs to
+                if middle_joint_type in joint_name:  # This is the knee/elbow
+                    middle = joint_obj
+                    current_section = post_middle  # Switch to post-middle section
+                else:
+                    current_section.append(joint_obj)
+
+            # DEBUG: Print the sections we identified
+            print(f"Chain sections for {chain}:")
+            print(f"  Pre-{middle_joint_type}: {pre_middle}")
+            print(f"  {middle_joint_type}: {middle}")
+            print(f"  Post-{middle_joint_type}: {post_middle}")
+
+            # Skip if we don't have enough joints
+            if not middle or not pre_middle or not post_middle:
+                print(f"  Missing required joints - skipping chain: {chain}")
                 continue
 
-            print(f"Orienting joint chain: {valid_joints}")
+            # DEBUG: Print positions
+            for section_name, joints in [
+                (f"Pre-{middle_joint_type}", pre_middle),
+                (f"{middle_joint_type}", [middle]),
+                (f"Post-{middle_joint_type}", post_middle)
+            ]:
+                for j in joints:
+                    pos = cmds.xform(j, query=True, translation=True, worldSpace=True)
+                    print(f"  Position of {j} ({section_name}): {pos}")
 
-            # Select the joints in order
-            cmds.select(clear=True)
-            cmds.select(valid_joints)
+            # Analyze the bend to determine appropriate orientation
+            import math
+            parent_pos = cmds.xform(pre_middle[-1], query=True, translation=True, worldSpace=True)
+            middle_pos = cmds.xform(middle, query=True, translation=True, worldSpace=True)
+            child_pos = cmds.xform(post_middle[0], query=True, translation=True, worldSpace=True)
 
-            # Orient joints using Maya's native command
-            cmds.joint(
-                edit=True,
-                orientJoint="xyz",  # Primary axis X
-                secondaryAxisOrient="yup",  # Secondary axis Y
-                children=True,  # Apply to all children
-                zeroScaleOrient=True  # Prevent scale from affecting orientation
-            )
+            # Calculate vectors
+            v1 = [middle_pos[i] - parent_pos[i] for i in range(3)]
+            v2 = [child_pos[i] - middle_pos[i] for i in range(3)]
 
-            # Zero out transform rotations for all joints in the chain
-            for joint in valid_joints:
-                cmds.setAttr(f"{joint}.rotateX", 0)
-                cmds.setAttr(f"{joint}.rotateY", 0)
-                cmds.setAttr(f"{joint}.rotateZ", 0)
+            # Calculate magnitudes
+            mag1 = math.sqrt(sum(c * c for c in v1))
+            mag2 = math.sqrt(sum(c * c for c in v2))
 
-                # Print out the resulting joint orient for debugging
-                joint_orient = cmds.getAttr(f"{joint}.jointOrient")[0]
-                print(f"  {joint} joint orientation: {joint_orient}")
+            # DEBUG: Print vectors and magnitudes
+            print(f"  Vector from {pre_middle[-1]} to {middle}: {v1} (mag: {mag1})")
+            print(f"  Vector from {middle} to {post_middle[0]}: {v2} (mag: {mag2})")
+
+            # Default orientation - will be updated based on analysis
+            middle_orientation = "yup"
+
+            if mag1 > 0.001 and mag2 > 0.001:  # Avoid division by zero
+                # Normalize vectors
+                v1n = [c / mag1 for c in v1]
+                v2n = [c / mag2 for c in v2]
+
+                # Calculate dot product
+                dot = sum(v1n[i] * v2n[i] for i in range(3))
+                angle_rad = math.acos(max(-1.0, min(1.0, dot)))  # Clamp to valid range
+                angle_deg = angle_rad * 180.0 / math.pi
+
+                # Calculate Y component of direction change
+                y_bend = v2[1] / mag2 if mag2 > 0 else 0
+
+                print(f"  Bend angle at {middle}: {angle_deg:.2f} degrees")
+                print(f"  Dot product: {dot}")
+                print(f"  Y direction bend: {y_bend}")
+
+                # DIFFERENT CRITERIA FOR KNEES VS ELBOWS
+                if middle_joint_type == 'knee':
+                    # For KNEES: Use ydown when there's significant negative Y bend
+                    # This is common in character leg poses even with modest bend angles
+                    if y_bend < -0.5:  # This threshold catches stronger downward bends
+                        middle_orientation = "ydown"
+                        print(f"  Using orientation: ydown (knee with downward bend)")
+                    else:
+                        print(f"  Using orientation: yup (knee not bending significantly downward)")
+                else:  # elbow
+                    # For ELBOWS: Only use ydown with extreme bends
+                    if angle_deg > 30 and y_bend < -0.3:
+                        middle_orientation = "ydown"
+                        print(f"  Using orientation: ydown (extremely bent elbow)")
+                    else:
+                        print(f"  Using orientation: yup (elbow not extremely bent)")
+
+            # 1. Orient the parent to the middle joint
+            if pre_middle and middle:
+                cmds.select(clear=True)
+                cmds.select(pre_middle[-1], middle)
+                print(f"  Orienting {pre_middle[-1]} to {middle} with yup")
+                cmds.joint(
+                    edit=True,
+                    orientJoint="xyz",
+                    secondaryAxisOrient="yup",  # Always use yup for this connection
+                    children=False
+                )
+
+            # 2. Orient the middle to the child joint - THIS IS THE CRITICAL PART
+            if middle and post_middle:
+                cmds.select(clear=True)
+                cmds.select(middle, post_middle[0])
+                print(f"  Orienting {middle} to {post_middle[0]} with {middle_orientation}")
+                cmds.joint(
+                    edit=True,
+                    orientJoint="xyz",
+                    secondaryAxisOrient=middle_orientation,  # Use the determined orientation
+                    children=False
+                )
+
+            # 3. Orient the rest of the chain
+            if len(post_middle) > 1:
+                cmds.select(clear=True)
+                cmds.select(post_middle)
+                print(f"  Orienting remaining chain: {post_middle}")
+                cmds.joint(
+                    edit=True,
+                    orientJoint="xyz",
+                    secondaryAxisOrient="yup",  # Use yup for the rest
+                    children=True
+                )
+
+            # Zero out rotations for all joints
+            for joint_name in chain:
+                if joint_name in self.joints and cmds.objExists(self.joints[joint_name]):
+                    joint = self.joints[joint_name]
+                    try:
+                        cmds.setAttr(f"{joint}.rotateX", 0)
+                        cmds.setAttr(f"{joint}.rotateY", 0)
+                        cmds.setAttr(f"{joint}.rotateZ", 0)
+
+                        # DEBUG: Print final orientation
+                        orient = cmds.getAttr(f"{joint}.jointOrient")[0]
+                        print(f"  Final {joint} orientation: {orient}")
+                    except Exception as e:
+                        print(f"  Error zeroing rotations for {joint}: {str(e)}")
 
         # Restore original selection
         cmds.select(clear=True)
