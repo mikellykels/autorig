@@ -163,7 +163,12 @@ class LimbModule(BaseModule):
         # Create joints
         self._create_joints()
 
+        # FIX JOINT ORIENTATIONS FIRST - moved this before control creation
         self._fix_joint_orientations()
+
+        # For legs, fix hip joint orientation immediately (moved from end to before control creation)
+        if self.limb_type == "leg":
+            self._fix_hip_joint_orientation()
 
         # Create IK chain
         self._create_ik_chain()
@@ -171,22 +176,20 @@ class LimbModule(BaseModule):
         # Create FK chain
         self._create_fk_chain()
 
-        # Create controls
+        # Create controls AFTER joint orientations are fixed
         if self.limb_type == "arm":
             self._create_arm_controls()
         elif self.limb_type == "leg":
             self._create_leg_controls()
 
-        # Create FK/IK switch - add this call before blending
+        # Create FK/IK switch
         self._create_fkik_switch()
 
         # Setup FK/IK blending
         self._setup_ikfk_blending()
 
+        # Finalize the FK/IK switch
         self._finalize_fkik_switch()
-
-        if self.limb_type == "leg":
-            self._fix_hip_joint_orientation()
 
         print(f"Build complete for {self.module_id}")
 
@@ -757,10 +760,8 @@ class LimbModule(BaseModule):
         # === FK CONTROLS - WITH LARGER SIZES ===
         # Hip FK control
         hip_jnt = self.joints["fk_hip"]
-        hip_pos = cmds.xform(hip_jnt, query=True, translation=True, worldSpace=True)
-        hip_rot = cmds.xform(hip_jnt, query=True, rotation=True, worldSpace=True)
 
-        # Create the control with X axis normal - same approach as arm FK controls
+        # Create the control with X axis normal
         hip_ctrl, hip_grp = create_control(
             f"{self.module_id}_hip_fk_ctrl",
             "circle",
@@ -769,17 +770,18 @@ class LimbModule(BaseModule):
             normal=[1, 0, 0]  # This makes the circle face along X axis
         )
 
-        # Position the control
-        cmds.xform(hip_grp, translation=hip_pos, worldSpace=True)
-        cmds.xform(hip_grp, rotation=hip_rot, worldSpace=True)
+        # IMPROVED ALIGNMENT METHOD: Use a temporary parent constraint to match the joint's transform exactly
+        print(f"Aligning hip control to joint: {hip_jnt}")
+        print(f"Joint orientation before constraint: {cmds.getAttr(hip_jnt + '.jointOrient')[0]}")
+        temp_constraint = cmds.parentConstraint(hip_jnt, hip_grp, maintainOffset=False)[0]
+        cmds.delete(temp_constraint)
+        print(f"Control group rotation after constraint: {cmds.getAttr(hip_grp + '.rotate')[0]}")
 
         cmds.parent(hip_grp, self.control_grp)
         self.controls["fk_hip"] = hip_ctrl
 
-        # Knee FK control
+        # Knee FK control - ALSO USING IMPROVED ALIGNMENT
         knee_jnt = self.joints["fk_knee"]
-        knee_pos = cmds.xform(knee_jnt, query=True, translation=True, worldSpace=True)
-        knee_rot = cmds.xform(knee_jnt, query=True, rotation=True, worldSpace=True)
 
         knee_ctrl, knee_grp = create_control(
             f"{self.module_id}_knee_fk_ctrl",
@@ -789,17 +791,15 @@ class LimbModule(BaseModule):
             normal=[1, 0, 0]  # This makes the circle face along X axis
         )
 
-        # Position the control
-        cmds.xform(knee_grp, translation=knee_pos, worldSpace=True)
-        cmds.xform(knee_grp, rotation=knee_rot, worldSpace=True)
+        # Use the same parent constraint technique for consistent alignment
+        temp_constraint = cmds.parentConstraint(knee_jnt, knee_grp, maintainOffset=False)[0]
+        cmds.delete(temp_constraint)
 
         cmds.parent(knee_grp, self.controls["fk_hip"])
         self.controls["fk_knee"] = knee_ctrl
 
-        # Ankle FK control
+        # Ankle FK control - ALSO USING IMPROVED ALIGNMENT
         ankle_jnt = self.joints["fk_ankle"]
-        ankle_pos = cmds.xform(ankle_jnt, query=True, translation=True, worldSpace=True)
-        ankle_rot = cmds.xform(ankle_jnt, query=True, rotation=True, worldSpace=True)
 
         ankle_ctrl, ankle_grp = create_control(
             f"{self.module_id}_ankle_fk_ctrl",
@@ -809,9 +809,9 @@ class LimbModule(BaseModule):
             normal=[1, 0, 0]  # This makes the circle face along X axis
         )
 
-        # Position the control
-        cmds.xform(ankle_grp, translation=ankle_pos, worldSpace=True)
-        cmds.xform(ankle_grp, rotation=ankle_rot, worldSpace=True)
+        # Use the same parent constraint technique for consistent alignment
+        temp_constraint = cmds.parentConstraint(ankle_jnt, ankle_grp, maintainOffset=False)[0]
+        cmds.delete(temp_constraint)
 
         cmds.parent(ankle_grp, self.controls["fk_knee"])
         self.controls["fk_ankle"] = ankle_ctrl
