@@ -99,16 +99,68 @@ class ModuleManager:
             if module_id in self.modules:
                 self.modules[module_id].set_guide_positions(positions)
 
+    def build_mirrored_module(self, left_module, right_module):
+        """
+        Build and connect all controls for a mirrored module.
+        This is much more reliable than trying to mirror controls.
+
+        Args:
+            left_module (BaseModule): Source module (left side)
+            right_module (BaseModule): Target module (right side)
+        """
+        print(f"\n=== BUILDING MIRRORED MODULE {right_module.module_id} FROM {left_module.module_id} ===")
+
+        # Verify modules are compatible
+        if left_module.module_type != right_module.module_type:
+            print(f"Module types don't match: {left_module.module_type} vs {right_module.module_type}")
+            return False
+
+        # Check if we already have joints before proceeding
+        if not right_module.joints:
+            print("No joints found in target module - mirroring joints first")
+            self._mirror_joints(left_module, right_module)
+            self._mirror_ik_handles(left_module, right_module)
+
+        # Clear any existing controls in the right module that might cause conflicts
+        if right_module.controls:
+            print("Clearing existing controls in target module")
+            for ctrl_name, ctrl in list(right_module.controls.items()):
+                if cmds.objExists(ctrl):
+                    grp_name = f"{ctrl}_grp"
+                    if cmds.objExists(grp_name):
+                        print(f"Deleting control group: {grp_name}")
+                        cmds.delete(grp_name)
+                    else:
+                        print(f"Deleting control: {ctrl}")
+                        cmds.delete(ctrl)
+            right_module.controls = {}
+
+        # Now call the appropriate creation method based on module type
+        if right_module.module_type == "leg":
+            print("Building leg controls for mirrored module")
+            right_module._create_leg_controls()
+            right_module._create_fkik_switch()
+            right_module._setup_ikfk_blending()
+            right_module._finalize_fkik_switch()
+
+            # Fix hip orientation
+            print("Fixing hip orientation for mirrored leg")
+            right_module._fix_hip_joint_orientation()
+
+        elif right_module.module_type == "arm":
+            print("Building arm controls for mirrored module")
+            right_module._create_arm_controls()
+            right_module._create_fkik_switch()
+            right_module._setup_ikfk_blending()
+            right_module._finalize_fkik_switch()
+
+        print(f"=== MIRRORED MODULE BUILD COMPLETE: {right_module.module_id} ===\n")
+        return True
+
     def mirror_modules(self):
         """
         Mirror left side modules to right side.
         Only mirror limb modules (arms and legs), not spine.
-
-        This handles mirroring at all stages of the rig:
-        1. Module creation
-        2. Guide placement
-        3. Joint creation
-        4. Control creation
 
         Returns:
             int: Number of modules mirrored
@@ -129,58 +181,39 @@ class ModuleManager:
             right_module_id = f"r_{left_module.module_name}"
 
             # Skip if right module already exists in modules dictionary
-            if f"r_{left_module.module_name}" in self.modules:
-                print(f"Right module {right_module_id} already exists, skipping")
-                continue
-
-            # Create a new module of the same type
-            if left_module.module_type == "arm":
-                from autorig.modules.limb import LimbModule
-                right_module = LimbModule("r", left_module.module_name, "arm")
-            elif left_module.module_type == "leg":
-                from autorig.modules.limb import LimbModule
-                right_module = LimbModule("r", left_module.module_name, "leg")
+            if right_module_id in self.modules:
+                print(f"Right module {right_module_id} already exists, updating it")
+                right_module = self.modules[right_module_id]
             else:
-                # Skip non-limb modules
-                continue
+                # Create a new module of the same type
+                if left_module.module_type == "arm":
+                    from autorig.modules.limb import LimbModule
+                    right_module = LimbModule("r", left_module.module_name, "arm")
+                elif left_module.module_type == "leg":
+                    from autorig.modules.limb import LimbModule
+                    right_module = LimbModule("r", left_module.module_name, "leg")
+                else:
+                    # Skip non-limb modules
+                    continue
 
-            # Register the new module
-            self.register_module(right_module)
+                # Register the new module
+                self.register_module(right_module)
+
             mirrored_count += 1
-
-            print(f"Created mirrored module: {right_module.module_id}")
+            print(f"Processing mirrored module: {right_module.module_id}")
 
             # 3. Mirror based on the stage of rig creation
-
             # 3a. If guides exist for the left module, mirror them
-            if left_module.guides:
+            if left_module.guides and not right_module.guides:
                 right_module.create_guides()
                 self._mirror_guides(left_module, right_module)
 
-            # 3b. If joints exist for the left module, mirror them
-            if left_module.joints:
-                # Check if left module has been fully built
-                left_built = len(left_module.controls) > 0
+            # 3b. Check if the left module is fully built (has controls)
+            left_built = len(left_module.controls) > 0
 
-                # Only mirror joints if right module doesn't have joints yet
-                if not right_module.joints:
-                    # Build just the joints without controls if the left module is not fully built
-                    if not left_built:
-                        if hasattr(right_module, '_create_joints'):
-                            right_module._create_joints()
-                        else:
-                            # Fall back to full build
-                            right_module.build()
-                    else:
-                        # If left is fully built, fully build right
-                        right_module.build()
-
-                    # Mirror joint positions and orientations
-                    self._mirror_joints(left_module, right_module)
-
-                # 3c. If controls exist for the left module, mirror them
-                if left_built and len(right_module.controls) > 0:
-                    self._mirror_controls(left_module, right_module)
+            if left_built:
+                # Use the completely new approach for building mirrored controls
+                self.build_mirrored_module(left_module, right_module)
 
         return mirrored_count
 
@@ -223,73 +256,111 @@ class ModuleManager:
 
     def _mirror_joints(self, source_module, target_module):
         """
-        Mirror joints from source module to target module.
+        Mirror joints from source module to target module using Maya's native mirror joint command.
 
         Args:
             source_module (BaseModule): Source module (left side)
             target_module (BaseModule): Target module (right side)
         """
         # Make sure both modules have joints
-        if not source_module.joints or not target_module.joints:
-            print("Error: Joints not found in one or both modules")
+        if not source_module.joints:
+            print("Error: Source joints not found")
             return
 
-        print(f"Mirroring joints from {source_module.module_id} to {target_module.module_id}")
+        print(f"\n=== MIRRORING JOINTS from {source_module.module_id} to {target_module.module_id} ===")
 
-        # Process joint chains - we need to handle the main chain and IK/FK chains
+        # Determine joint chains based on module type
+        if source_module.module_type == "arm":
+            main_chain = ["shoulder", "elbow", "wrist", "hand"]
+        elif source_module.module_type == "leg":
+            main_chain = ["hip", "knee", "ankle", "foot", "toe"]
+        else:
+            print("Not a limb module, skipping")
+            return
+
+        # Get joint groups for each module
+        source_joint_grp = source_module.joint_grp
+        target_joint_grp = target_module.joint_grp
+
+        if not cmds.objExists(source_joint_grp) or not cmds.objExists(target_joint_grp):
+            print(f"Joint groups do not exist: {source_joint_grp} or {target_joint_grp}")
+            return
+
+        print(f"Source joint group: {source_joint_grp}")
+        print(f"Target joint group: {target_joint_grp}")
+
+        # Process each chain type: main, IK, and FK
         joint_prefixes = ["", "ik_", "fk_"]
 
         for prefix in joint_prefixes:
-            # Determine joint chains based on module type
-            if source_module.module_type == "arm":
-                joint_chain = ["shoulder", "elbow", "wrist", "hand"]
-            elif source_module.module_type == "leg":
-                joint_chain = ["hip", "knee", "ankle", "foot", "toe"]
-            else:
-                continue  # Skip non-limb modules
+            print(f"\n--- Processing chain with prefix: '{prefix}' ---")
 
-            # Mirror each joint in the chain
-            for joint_name in joint_chain:
-                source_key = f"{prefix}{joint_name}"
+            # Get source root joint
+            root_joint_name = main_chain[0]
+            source_key = f"{prefix}{root_joint_name}"
 
-                # Skip if source or target joint doesn't exist
-                if (source_key not in source_module.joints or
-                        source_key not in target_module.joints or
-                        not cmds.objExists(source_module.joints[source_key]) or
-                        not cmds.objExists(target_module.joints[source_key])):
-                    continue
+            if source_key not in source_module.joints or not cmds.objExists(source_module.joints[source_key]):
+                print(f"Source joint {source_key} not found, skipping chain")
+                continue
 
-                source_joint = source_module.joints[source_key]
-                target_joint = target_module.joints[source_key]
+            source_root_joint = source_module.joints[source_key]
+            print(f"Root joint: {source_root_joint}")
 
-                # Mirror the joint position
-                pos = cmds.xform(source_joint, query=True, translation=True, worldSpace=True)
-                mirror_pos = [-pos[0], pos[1], pos[2]]
+            # Debug: Print all joints in this chain
+            for joint_name in main_chain:
+                joint_key = f"{prefix}{joint_name}"
+                if joint_key in source_module.joints:
+                    print(f"Chain includes {joint_key}: {source_module.joints[joint_key]}")
 
-                # Apply position to target joint - use relative movement to avoid hierarchy issues
-                curr_pos = cmds.xform(target_joint, query=True, translation=True, worldSpace=True)
-                delta = [mirror_pos[i] - curr_pos[i] for i in range(3)]
+            # Delete existing target joints of this type if they exist
+            for joint_name in main_chain:
+                target_key = f"{prefix}{joint_name}"
+                if target_key in target_module.joints and cmds.objExists(target_module.joints[target_key]):
+                    print(f"Deleting existing target joint: {target_module.joints[target_key]}")
+                    cmds.delete(target_module.joints[target_key])
 
-                # Get joint's parent to handle relative movement
-                parent = cmds.listRelatives(target_joint, parent=True)
-                if parent:
-                    # Convert delta to local space if needed
-                    cmds.xform(target_joint, translation=delta, relative=True)
-                else:
-                    # If no parent, just set world position
-                    cmds.xform(target_joint, translation=mirror_pos, worldSpace=True)
+            # Use Maya's native mirror joint command
+            print(f"Mirroring joint chain using native Maya mirrorJoint command")
+            try:
+                # Make sure the joint is visible for selection
+                cmds.setAttr(f"{source_root_joint}.visibility", 1)
 
-                # Mirror joint orientation
-                # Note: For proper behavior mirroring, we need to handle the joint orientation appropriately
-                joint_orient = cmds.getAttr(f"{source_joint}.jointOrient")[0]
-                mirror_orient = [joint_orient[0], -joint_orient[1], -joint_orient[2]]
+                # Select the source root joint
+                cmds.select(source_root_joint, replace=True)
+                selected = cmds.ls(selection=True)
+                print(f"Selected for mirroring: {selected}")
 
-                try:
-                    cmds.setAttr(f"{target_joint}.jointOrient", *mirror_orient)
-                except Exception as e:
-                    print(f"Error setting joint orientation for {target_joint}: {str(e)}")
+                # Mirror across YZ plane with proper behavior
+                mirrored_joints = cmds.mirrorJoint(
+                    mirrorYZ=True,  # Mirror across YZ plane (flip X)
+                    mirrorBehavior=True,  # Mirror orientation behavior
+                    searchReplace=[f"{source_module.side}_", f"{target_module.side}_"]  # Replace l_ with r_ etc.
+                )
 
-                print(f"Mirrored joint: {source_key} from {source_module.module_id} to {target_module.module_id}")
+                print(f"Successfully mirrored joints: {mirrored_joints}")
+
+                # Update the target module's joint dictionary with the new joints
+                for i, joint_name in enumerate(main_chain):
+                    if i < len(mirrored_joints):
+                        target_key = f"{prefix}{joint_name}"
+                        # Store short name to avoid path issues
+                        mirrored_joint_name = mirrored_joints[i].split('|')[-1]
+                        target_module.joints[target_key] = mirrored_joint_name
+                        print(f"Updated target joint: {target_key} = {mirrored_joint_name}")
+
+                # Reparent the mirrored joints to the target joint group
+                if mirrored_joints:
+                    root_mirrored = mirrored_joints[0]
+                    print(f"Reparenting {root_mirrored} to {target_joint_grp}")
+                    cmds.parent(root_mirrored, target_joint_grp)
+
+            except Exception as e:
+                print(f"Error mirroring joints: {str(e)}")
+                import traceback
+                traceback.print_exc()
+
+        print(f"=== JOINT MIRRORING COMPLETE: {source_module.module_id} to {target_module.module_id} ===\n")
+        return True
 
     def _mirror_controls(self, source_module, target_module):
         """
@@ -395,3 +466,345 @@ class ModuleManager:
                                                                                                            exists=True):
                     value = cmds.getAttr(f"{source_ctrl}.FkIkBlend")
                     cmds.setAttr(f"{target_ctrl}.FkIkBlend", value)
+
+    def _setup_mirrored_constraints(self, source_module, target_module):
+        """
+        Set up constraints for mirrored controls to their corresponding joints.
+
+        Args:
+            source_module (BaseModule): Source module (left side)
+            target_module (BaseModule): Target module (right side)
+        """
+        print(f"Setting up constraints for mirrored module: {target_module.module_id}")
+
+        # Handle different constraint setup based on module type
+        if target_module.limb_type == "arm":
+            # Setup FK constraints
+            for joint_name, ctrl_name in [
+                ("fk_shoulder", "fk_shoulder"),
+                ("fk_elbow", "fk_elbow"),
+                ("fk_wrist", "fk_wrist")
+            ]:
+                if joint_name in target_module.joints and ctrl_name in target_module.controls:
+                    joint = target_module.joints[joint_name]
+                    ctrl = target_module.controls[ctrl_name]
+
+                    # Delete any existing constraints
+                    constraints = cmds.listConnections(joint, source=True, destination=True, type="constraint") or []
+                    for constraint in constraints:
+                        if cmds.objExists(constraint):
+                            cmds.delete(constraint)
+
+                    # Create new constraints
+                    print(f"Creating constraints from {ctrl} to {joint}")
+                    cmds.orientConstraint(ctrl, joint, maintainOffset=True)
+                    cmds.pointConstraint(ctrl, joint, maintainOffset=True)
+
+            # Setup IK constraints
+            if "ik_handle" in target_module.controls and "ik_wrist" in target_module.controls:
+                ik_handle = target_module.controls["ik_handle"]
+                wrist_ctrl = target_module.controls["ik_wrist"]
+
+                # Clear existing constraints
+                constraints = cmds.listConnections(ik_handle, source=True, destination=True, type="constraint") or []
+                for constraint in constraints:
+                    if cmds.objExists(constraint):
+                        cmds.delete(constraint)
+
+                # Create new constraints
+                print(f"Creating IK constraints for {target_module.module_id}")
+                cmds.pointConstraint(wrist_ctrl, ik_handle, maintainOffset=True)
+
+                # Add pole vector constraint
+                if "pole" in target_module.controls:
+                    pole_ctrl = target_module.controls["pole"]
+                    cmds.poleVectorConstraint(pole_ctrl, ik_handle)
+
+                # Orient constraint for IK wrist joint
+                if "ik_wrist" in target_module.joints:
+                    cmds.orientConstraint(wrist_ctrl, target_module.joints["ik_wrist"], maintainOffset=True)
+
+                # Connect IK hand - make it follow the IK wrist joint
+                if "ik_wrist" in target_module.joints and "ik_hand" in target_module.joints:
+                    cmds.parentConstraint(target_module.joints["ik_wrist"], target_module.joints["ik_hand"],
+                                          maintainOffset=True)
+
+        elif target_module.limb_type == "leg":
+            # Setup FK constraints
+            for joint_name, ctrl_name in [
+                ("fk_hip", "fk_hip"),
+                ("fk_knee", "fk_knee"),
+                ("fk_ankle", "fk_ankle")
+            ]:
+                if joint_name in target_module.joints and ctrl_name in target_module.controls:
+                    joint = target_module.joints[joint_name]
+                    ctrl = target_module.controls[ctrl_name]
+
+                    # Delete any existing constraints
+                    constraints = cmds.listConnections(joint, source=True, destination=True, type="constraint") or []
+                    for constraint in constraints:
+                        if cmds.objExists(constraint):
+                            cmds.delete(constraint)
+
+                    # Create new constraints
+                    print(f"Creating constraints from {ctrl} to {joint}")
+                    cmds.orientConstraint(ctrl, joint, maintainOffset=True)
+                    cmds.pointConstraint(ctrl, joint, maintainOffset=True)
+
+            # Connect FK foot and toe to follow the FK ankle
+            if "fk_ankle" in target_module.controls:
+                ankle_ctrl = target_module.controls["fk_ankle"]
+                for jnt in ["fk_foot", "fk_toe"]:
+                    if jnt in target_module.joints:
+                        # Remove existing constraints
+                        constraints = cmds.listConnections(target_module.joints[jnt], source=True, destination=True,
+                                                           type="constraint") or []
+                        for constraint in constraints:
+                            if cmds.objExists(constraint):
+                                cmds.delete(constraint)
+
+                        # Create new constraint
+                        cmds.parentConstraint(ankle_ctrl, target_module.joints[jnt], maintainOffset=True)
+
+            # Setup IK constraints
+            if "ik_handle" in target_module.controls and "pole" in target_module.controls:
+                ik_handle = target_module.controls["ik_handle"]
+                pole_ctrl = target_module.controls["pole"]
+
+                # Clear existing constraints
+                constraints = cmds.listConnections(ik_handle, source=True, destination=True, type="constraint") or []
+                for constraint in constraints:
+                    if cmds.objExists(constraint):
+                        cmds.delete(constraint)
+
+                # Add pole vector constraint
+                print(f"Creating pole vector constraint for {target_module.module_id}")
+                cmds.poleVectorConstraint(pole_ctrl, ik_handle)
+
+                # Set up foot roll group connection
+                if "ik_ankle" in target_module.controls and "foot_roll_grp" in target_module.controls:
+                    ankle_ctrl = target_module.controls["ik_ankle"]
+                    foot_roll_grp = target_module.controls["foot_roll_grp"]
+
+                    # Remove existing constraints
+                    constraints = cmds.listConnections(foot_roll_grp, source=True, destination=True,
+                                                       type="constraint") or []
+                    for constraint in constraints:
+                        if cmds.objExists(constraint):
+                            cmds.delete(constraint)
+
+                    # Create parent constraint
+                    cmds.parentConstraint(
+                        ankle_ctrl,
+                        foot_roll_grp,
+                        maintainOffset=True,
+                        name=f"{target_module.module_id}_footRoll_parentConstraint"
+                    )
+
+                # Orient constraint for IK ankle
+                if "ik_ankle" in target_module.controls and "ik_ankle" in target_module.joints:
+                    ankle_ctrl = target_module.controls["ik_ankle"]
+                    ankle_joint = target_module.joints["ik_ankle"]
+
+                    # Remove existing constraints
+                    constraints = cmds.listConnections(ankle_joint, source=True, destination=True,
+                                                       type="orientConstraint") or []
+                    for constraint in constraints:
+                        if cmds.objExists(constraint):
+                            cmds.delete(constraint)
+
+                    # Create orient constraint
+                    cmds.orientConstraint(ankle_ctrl, ankle_joint, maintainOffset=True)
+
+        # Fix FK/IK blending
+        if "fkik_switch" in target_module.controls:
+            print("Fixing FK/IK blending for mirrored module")
+            # Essentially call target_module._setup_ikfk_blending() without duplicating all that code
+            target_module._setup_ikfk_blending()
+
+        print(f"Constraint setup complete for mirrored module: {target_module.module_id}")
+
+    def _mirror_ik_handles(self, source_module, target_module):
+        """
+        Properly mirror IK handles from source module to target module.
+
+        Args:
+            source_module (BaseModule): Source module (left side)
+            target_module (BaseModule): Target module (right side)
+        """
+        print(f"\n=== MIRRORING IK HANDLES from {source_module.module_id} to {target_module.module_id} ===")
+
+        # Check module type
+        if source_module.module_type not in ["arm", "leg"]:
+            print("Not a limb module, skipping")
+            return
+
+        # Mirror arm IK handles
+        if source_module.module_type == "arm":
+            print("Processing arm IK handles")
+
+            # Create IK handle from shoulder to wrist ONLY
+            if "ik_shoulder" in target_module.joints and "ik_wrist" in target_module.joints:
+                # Delete any existing IK handle
+                ik_handle_name = f"{target_module.module_id}_arm_ikh"
+                if cmds.objExists(ik_handle_name):
+                    print(f"Deleting existing IK handle: {ik_handle_name}")
+                    cmds.delete(ik_handle_name)
+
+                # Create new IK handle
+                print(
+                    f"Creating IK handle from {target_module.joints['ik_shoulder']} to {target_module.joints['ik_wrist']}")
+                ik_handle, ik_effector = cmds.ikHandle(
+                    name=ik_handle_name,
+                    startJoint=target_module.joints["ik_shoulder"],
+                    endEffector=target_module.joints["ik_wrist"],  # Stop at wrist
+                    solver="ikRPsolver"
+                )
+                target_module.controls["ik_handle"] = ik_handle
+                print(f"Created IK handle: {ik_handle}")
+
+                # Create IK handle group
+                ik_handle_grp_name = f"{target_module.module_id}_arm_ikh_grp"
+                if cmds.objExists(ik_handle_grp_name):
+                    print(f"Deleting existing IK handle group: {ik_handle_grp_name}")
+                    cmds.delete(ik_handle_grp_name)
+
+                ik_handle_grp = cmds.group(ik_handle, name=ik_handle_grp_name)
+                print(f"Created IK handle group: {ik_handle_grp}")
+
+                print(f"Parenting {ik_handle_grp} to {target_module.control_grp}")
+                cmds.parent(ik_handle_grp, target_module.control_grp)
+
+        # Mirror leg IK handles
+        elif source_module.module_type == "leg":
+            print("Processing leg IK handles")
+
+            # Create IK handle from hip to ankle ONLY
+            if "ik_hip" in target_module.joints and "ik_ankle" in target_module.joints:
+                # Delete any existing IK handle
+                ik_handle_name = f"{target_module.module_id}_leg_ikh"
+                if cmds.objExists(ik_handle_name):
+                    print(f"Deleting existing IK handle: {ik_handle_name}")
+                    cmds.delete(ik_handle_name)
+
+                # Create new IK handle
+                print(f"Creating IK handle from {target_module.joints['ik_hip']} to {target_module.joints['ik_ankle']}")
+                ik_handle, ik_effector = cmds.ikHandle(
+                    name=ik_handle_name,
+                    startJoint=target_module.joints["ik_hip"],
+                    endEffector=target_module.joints["ik_ankle"],  # Stop at ankle
+                    solver="ikRPsolver"
+                )
+                target_module.controls["ik_handle"] = ik_handle
+                print(f"Created IK handle: {ik_handle}")
+
+                # Create IK handle group
+                ik_handle_grp_name = f"{target_module.module_id}_leg_ikh_grp"
+                if cmds.objExists(ik_handle_grp_name):
+                    print(f"Deleting existing IK handle group: {ik_handle_grp_name}")
+                    cmds.delete(ik_handle_grp_name)
+
+                ik_handle_grp = cmds.group(ik_handle, name=ik_handle_grp_name)
+                print(f"Created IK handle group: {ik_handle_grp}")
+
+                print(f"Parenting {ik_handle_grp} to {target_module.control_grp}")
+                cmds.parent(ik_handle_grp, target_module.control_grp)
+
+                # Create foot roll system
+                if "ik_ankle" in target_module.joints and "ik_foot" in target_module.joints and "ik_toe" in target_module.joints:
+                    print(f"Creating foot roll system for {target_module.module_id}")
+
+                    # Delete any existing foot IK handles
+                    ankle_foot_ik_name = f"{target_module.module_id}_ankle_foot_ikh"
+                    foot_toe_ik_name = f"{target_module.module_id}_foot_toe_ikh"
+                    foot_roll_grp_name = f"{target_module.module_id}_foot_roll_grp"
+
+                    for name in [ankle_foot_ik_name, foot_toe_ik_name, foot_roll_grp_name]:
+                        if cmds.objExists(name):
+                            print(f"Deleting existing object: {name}")
+                            cmds.delete(name)
+
+                    # Create ankle to foot IK handle
+                    print(
+                        f"Creating ankle-foot IK handle from {target_module.joints['ik_ankle']} to {target_module.joints['ik_foot']}")
+                    ankle_foot_ik, ankle_foot_eff = cmds.ikHandle(
+                        name=ankle_foot_ik_name,
+                        startJoint=target_module.joints["ik_ankle"],
+                        endEffector=target_module.joints["ik_foot"],
+                        solver="ikSCsolver"
+                    )
+
+                    # Create foot to toe IK handle
+                    print(
+                        f"Creating foot-toe IK handle from {target_module.joints['ik_foot']} to {target_module.joints['ik_toe']}")
+                    foot_toe_ik, foot_toe_eff = cmds.ikHandle(
+                        name=foot_toe_ik_name,
+                        startJoint=target_module.joints["ik_foot"],
+                        endEffector=target_module.joints["ik_toe"],
+                        solver="ikSCsolver"
+                    )
+
+                    # Get position data for reverse foot setup
+                    ankle_pos = cmds.xform(target_module.joints["ik_ankle"], query=True, translation=True,
+                                           worldSpace=True)
+                    foot_pos = cmds.xform(target_module.joints["ik_foot"], query=True, translation=True,
+                                          worldSpace=True)
+                    toe_pos = cmds.xform(target_module.joints["ik_toe"], query=True, translation=True, worldSpace=True)
+
+                    # Get heel position - it's a guide
+                    if "heel" in target_module.guides and cmds.objExists(target_module.guides["heel"]):
+                        heel_pos = cmds.xform(target_module.guides["heel"], query=True, translation=True,
+                                              worldSpace=True)
+                        print(f"Using heel guide for position: {heel_pos}")
+                    else:
+                        # Estimate heel position if guide doesn't exist
+                        heel_pos = [foot_pos[0], foot_pos[1], foot_pos[2] - 5.0]
+                        print(f"Using estimated heel position: {heel_pos}")
+
+                    # Create foot roll hierarchy
+                    print("Creating foot roll group hierarchy")
+                    foot_roll_grp = cmds.group(empty=True, name=foot_roll_grp_name)
+                    cmds.xform(foot_roll_grp, translation=[0, 0, 0], worldSpace=True)
+                    cmds.parent(foot_roll_grp, target_module.control_grp)
+
+                    heel_grp = cmds.group(empty=True, name=f"{target_module.module_id}_heel_pivot_grp")
+                    cmds.xform(heel_grp, translation=heel_pos, worldSpace=True)
+                    cmds.parent(heel_grp, foot_roll_grp)
+
+                    toe_grp = cmds.group(empty=True, name=f"{target_module.module_id}_toe_pivot_grp")
+                    cmds.xform(toe_grp, translation=toe_pos, worldSpace=True)
+                    cmds.parent(toe_grp, heel_grp)
+
+                    ball_grp = cmds.group(empty=True, name=f"{target_module.module_id}_ball_pivot_grp")
+                    cmds.xform(ball_grp, translation=foot_pos, worldSpace=True)
+                    cmds.parent(ball_grp, toe_grp)
+
+                    ankle_grp = cmds.group(empty=True, name=f"{target_module.module_id}_ankle_pivot_grp")
+                    cmds.xform(ankle_grp, translation=ankle_pos, worldSpace=True)
+                    cmds.parent(ankle_grp, ball_grp)
+
+                    # Parent IK handles to appropriate groups
+                    print(f"Parenting {foot_toe_ik} to {ball_grp}")
+                    cmds.parent(foot_toe_ik, ball_grp)
+
+                    print(f"Parenting {ankle_foot_ik} to {ankle_grp}")
+                    cmds.parent(ankle_foot_ik, ankle_grp)
+
+                    # Parent main leg IK handle to ankle group
+                    print(f"Parenting {ik_handle} to {ankle_grp}")
+                    cmds.parent(ik_handle, ankle_grp)
+
+                    # Store references to the pivot groups
+                    target_module.controls["foot_roll_grp"] = foot_roll_grp
+                    target_module.controls["heel_pivot"] = heel_grp
+                    target_module.controls["toe_pivot"] = toe_grp
+                    target_module.controls["ball_pivot"] = ball_grp
+                    target_module.controls["ankle_pivot"] = ankle_grp
+
+                    # Store the foot IK handles
+                    target_module.controls["ankle_foot_ik"] = ankle_foot_ik
+                    target_module.controls["foot_toe_ik"] = foot_toe_ik
+
+                    print(f"Created reverse foot pivot system for {target_module.module_id}")
+
+        print(f"=== IK HANDLE MIRRORING COMPLETE: {source_module.module_id} to {target_module.module_id} ===\n")

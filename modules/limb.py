@@ -185,6 +185,9 @@ class LimbModule(BaseModule):
 
         self._finalize_fkik_switch()
 
+        if self.limb_type == "leg":
+            self._fix_hip_joint_orientation()
+
         print(f"Build complete for {self.module_id}")
 
     def _create_joints(self):
@@ -1461,9 +1464,186 @@ class LimbModule(BaseModule):
                     except Exception as e:
                         print(f"  Error zeroing rotations for {joint}: {str(e)}")
 
+                        # SPECIAL FIX FOR HIP JOINTS - Apply at the end
+                        if self.limb_type == "leg":
+                            # This fix will run after the main orientation logic
+                            hip_variants = ["hip", "fk_hip", "ik_hip"]
+
+                            for hip_name in hip_variants:
+                                if hip_name in self.joints and cmds.objExists(self.joints[hip_name]):
+                                    hip_joint = self.joints[hip_name]
+
+                                    # Only process left/right legs
+                                    if (self.side == "l" or self.side == "r"):
+                                        print(f"Applying special orientation fix to {hip_joint}")
+
+                                        # Store all children and their world positions/rotations
+                                        children = cmds.listRelatives(hip_joint, allDescendents=True,
+                                                                      type="joint") or []
+                                        children_data = {}
+
+                                        for child in children:
+                                            # Store world position and rotation
+                                            pos = cmds.xform(child, query=True, translation=True, worldSpace=True)
+                                            rot = cmds.xform(child, query=True, rotation=True, worldSpace=True)
+                                            children_data[child] = {"pos": pos, "rot": rot}
+
+                                        # Temporarily unparent all children
+                                        for child in children:
+                                            cmds.parent(child, world=True)
+
+                                        # Apply orientation using Maya's native joint command with exact parameters
+                                        cmds.select(hip_joint, replace=True)
+                                        cmds.joint(edit=True, orientJoint="xyz", secondaryAxisOrient="zup")
+
+                                        # Reconstruct the hierarchy
+                                        # Get the immediate children first
+                                        immediate_children = []
+                                        for child in children:
+                                            # Check if parent is in our children list - if not, it's an immediate child
+                                            parent = cmds.listRelatives(child, parent=True)
+                                            if not parent or parent[0] not in children:
+                                                immediate_children.append(child)
+
+                                        # Parent immediate children back to hip
+                                        for child in immediate_children:
+                                            cmds.parent(child, hip_joint)
+
+                                        # Now rebuild the rest of the hierarchy
+                                        for child in children:
+                                            if child not in immediate_children:
+                                                original_parent = None
+                                                # Find original parent
+                                                for potential_parent in children:
+                                                    if potential_parent != child:
+                                                        # Check if this child used to be under the potential parent
+                                                        child_full_path = child.split("|")[-1]  # Get short name
+                                                        if child_full_path.startswith(
+                                                                potential_parent.split("|")[-1] + "|"):
+                                                            original_parent = potential_parent
+                                                            break
+
+                                                if original_parent and cmds.objExists(original_parent):
+                                                    try:
+                                                        cmds.parent(child, original_parent)
+                                                    except Exception as e:
+                                                        print(f"Error reparenting {child}: {str(e)}")
+
+                                        # Restore world positions
+                                        for child, data in children_data.items():
+                                            if cmds.objExists(child):
+                                                try:
+                                                    cmds.xform(child, translation=data["pos"], worldSpace=True)
+                                                    cmds.xform(child, rotation=data["rot"], worldSpace=True)
+                                                except Exception as e:
+                                                    print(f"Error restoring position for {child}: {str(e)}")
+
+                                        print(f"Special orientation fix complete for {hip_joint}")
+
         # Restore original selection
         cmds.select(clear=True)
         if current_selection:
             cmds.select(current_selection)
 
         print("Joint orientation fix complete")
+
+    def _fix_hip_joint_orientation(self):
+        """
+        Special method to fix only the hip joint orientation using Maya's native joint orient command.
+        This is called at the end of the build process to ensure correct orientation.
+        """
+        print("\n=== STARTING HIP JOINT ORIENTATION FIX ===")
+
+        if self.limb_type != "leg" or (self.side != "l" and self.side != "r"):
+            print("Not a left/right leg, skipping fix")
+            return
+
+        # Process each hip variant
+        for hip_type in ["hip", "fk_hip", "ik_hip"]:
+            if hip_type not in self.joints:
+                print(f"No {hip_type} joint found, skipping")
+                continue
+
+            hip_joint = self.joints[hip_type]
+            if not cmds.objExists(hip_joint):
+                print(f"Joint {hip_joint} does not exist, skipping")
+                continue
+
+            print(f"\nFixing {hip_joint} orientation...")
+
+            # Get and print current orientation and rotation
+            current_orient = cmds.getAttr(f"{hip_joint}.jointOrient")[0]
+            current_rotate = cmds.getAttr(f"{hip_joint}.rotate")[0]
+            print(f"Current orientation before fix: {current_orient}")
+            print(f"Current rotation before fix: {current_rotate}")
+
+            # Find the immediate child (knee)
+            children = cmds.listRelatives(hip_joint, children=True, type="joint")
+            if not children:
+                print(f"No children found for {hip_joint}, skipping")
+                continue
+
+            knee_joint = children[0]
+            print(f"Found knee joint: {knee_joint}")
+
+            # Store knee position and rotation
+            knee_pos = cmds.xform(knee_joint, query=True, translation=True, worldSpace=True)
+            knee_rot = cmds.xform(knee_joint, query=True, rotation=True, worldSpace=True)
+            print(f"Stored knee position: {knee_pos}")
+            print(f"Stored knee rotation: {knee_rot}")
+
+            # Temporarily unparent the knee
+            print(f"Unparenting {knee_joint}")
+            cmds.parent(knee_joint, world=True)
+
+            # Store any constraints on the hip joint
+            constraints = cmds.listConnections(hip_joint, source=True, destination=True, type="constraint") or []
+            print(f"Found constraints: {constraints}")
+
+            # Temporarily disconnect constraints if any
+            for constraint in constraints:
+                if cmds.objExists(constraint):
+                    print(f"Temporarily breaking constraint: {constraint}")
+                    cmds.delete(constraint)
+
+            # Zero out rotations
+            print("Setting rotation to zero")
+            cmds.setAttr(f"{hip_joint}.rotate", 0, 0, 0)
+
+            # Apply orientation using Python API directly
+            print(f"Selecting {hip_joint}")
+            cmds.select(hip_joint, replace=True)
+
+            print("Applying direct Python joint orientation command with zup")
+            try:
+                # Using Python API directly instead of MEL
+                cmds.joint(edit=True, orientJoint="xyz", secondaryAxisOrient="zup")
+                print("Joint orientation command executed successfully")
+            except Exception as e:
+                print(f"Error applying joint orientation: {str(e)}")
+
+            # Manually set to exactly 90
+            print("Setting X joint orient to exactly 90 degrees")
+            current_orient = cmds.getAttr(f"{hip_joint}.jointOrient")[0]
+            cmds.setAttr(f"{hip_joint}.jointOrient", 90.0, current_orient[1], current_orient[2])
+
+            # Print the orientation after fix
+            new_orient = cmds.getAttr(f"{hip_joint}.jointOrient")[0]
+            print(f"New orientation after fix: {new_orient}")
+
+            # Restore original rotation
+            print(f"Restoring original rotation: {current_rotate}")
+            cmds.setAttr(f"{hip_joint}.rotate", *current_rotate)
+
+            # Reparent knee
+            print(f"Reparenting {knee_joint} to {hip_joint}")
+            cmds.parent(knee_joint, hip_joint)
+
+            # Restore knee position and rotation
+            print(f"Restoring knee position and rotation")
+            cmds.xform(knee_joint, translation=knee_pos, worldSpace=True)
+            cmds.xform(knee_joint, rotation=knee_rot, worldSpace=True)
+
+            print(f"Fix completed for {hip_joint}")
+
+        print("=== HIP JOINT ORIENTATION FIX COMPLETE ===\n")
