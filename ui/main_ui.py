@@ -66,6 +66,10 @@ class ModularRigUI(QtWidgets.QDialog):
         self.add_module_button = QtWidgets.QPushButton("Add Module")
         self.add_module_button.setEnabled(False)  # Disabled until rig is initialized
 
+        self.mirror_modules_button = QtWidgets.QPushButton("Mirror Modules")
+        self.mirror_modules_button.setEnabled(False)  # Disabled until rig is initialized
+        self.mirror_modules_button.setStyleSheet("background-color: #E6A8D7; font-weight: bold;")
+
         # Module Settings section
         self.settings_label = QtWidgets.QLabel("Module Settings")
         self.settings_label.setStyleSheet("font-weight: bold; margin-top: 10px;")
@@ -152,6 +156,7 @@ class ModularRigUI(QtWidgets.QDialog):
         module_list_group = QtWidgets.QGroupBox("Module List")
         module_list_layout = QtWidgets.QVBoxLayout()
         module_list_layout.addWidget(self.module_list)
+        module_list_layout.addWidget(self.mirror_modules_button)
         module_list_group.setLayout(module_list_layout)
 
         # Guide and Build Controls group
@@ -184,6 +189,7 @@ class ModularRigUI(QtWidgets.QDialog):
         self.save_guides_button.clicked.connect(self.save_guide_positions)
         self.load_guides_button.clicked.connect(self.load_guide_positions)
         self.build_rig_button.clicked.connect(self.build_rig)
+        self.mirror_modules_button.clicked.connect(self.mirror_modules)
 
         # Set default module name
         self.update_module_name()
@@ -230,6 +236,7 @@ class ModularRigUI(QtWidgets.QDialog):
         self.save_guides_button.setEnabled(True)
         self.load_guides_button.setEnabled(True)
         self.build_rig_button.setEnabled(True)
+        self.mirror_modules_button.setEnabled(True)
 
         QtWidgets.QMessageBox.information(self, "Success", f"Initialized rig for character: {character_name}")
 
@@ -346,6 +353,55 @@ class ModularRigUI(QtWidgets.QDialog):
         if result == QtWidgets.QMessageBox.Yes:
             self.manager.build_all_modules()
             QtWidgets.QMessageBox.information(self, "Success", "Rig built successfully!")
+
+    def mirror_modules(self):
+        """Mirror left side modules to right side."""
+        if not self.manager:
+            QtWidgets.QMessageBox.warning(self, "Warning", "Please initialize the rig first.")
+            return
+
+        # Verify we have modules to mirror
+        if not self.manager.modules:
+            QtWidgets.QMessageBox.warning(self, "Warning", "No modules added yet.")
+            return
+
+        # Check if there are any left side modules to mirror
+        left_modules = [m for m in self.manager.modules.values() if m.side == "l"]
+        if not left_modules:
+            QtWidgets.QMessageBox.warning(self, "Warning", "No left side modules found to mirror.")
+            return
+
+        # Confirm with user
+        result = QtWidgets.QMessageBox.question(
+            self,
+            "Mirror Modules",
+            "This will mirror all left side modules to the right side. Continue?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No
+        )
+
+        if result == QtWidgets.QMessageBox.Yes:
+            # Execute mirroring
+            mirrored_count = self.manager.mirror_modules()
+
+            # Update the module list in the UI
+            self.update_module_list()
+
+            QtWidgets.QMessageBox.information(
+                self,
+                "Success",
+                f"Mirrored {mirrored_count} modules to the right side."
+            )
+
+    def update_module_list(self):
+        """Update the module list in the UI."""
+        # Clear the existing list
+        self.module_list.clear()
+
+        # Add all modules from the manager
+        for module_id, module in self.manager.modules.items():
+            module_type = module.module_type.capitalize()
+            list_item = QtWidgets.QListWidgetItem(f"{module.side}_{module.module_name} ({module_type})")
+            self.module_list.addItem(list_item)
 
 def show_ui():
     """Show the UI, ensuring only one instance exists."""
