@@ -1555,6 +1555,9 @@ class LimbModule(BaseModule):
             print("Not a left/right leg, skipping fix")
             return
 
+        # Track pole vector constraints we need to restore later
+        pole_vector_constraints = []
+
         # Process each hip variant
         for hip_type in ["hip", "fk_hip", "ik_hip"]:
             if hip_type not in self.joints:
@@ -1596,6 +1599,17 @@ class LimbModule(BaseModule):
             # Store any constraints on the hip joint
             constraints = cmds.listConnections(hip_joint, source=True, destination=True, type="constraint") or []
             print(f"Found constraints: {constraints}")
+
+            # Check specifically for pole vector constraints we need to restore
+            if hip_type == "ik_hip":
+                # Find pole vector constraints related to this leg
+                ik_handle = self.controls.get("ik_handle")
+                if ik_handle:
+                    pole_constraints = cmds.listConnections(ik_handle, type="poleVectorConstraint") or []
+                    if pole_constraints:
+                        # Save all pole vector constraints to restore later
+                        pole_vector_constraints.extend(pole_constraints)
+                        print(f"Found pole vector constraints to preserve: {pole_constraints}")
 
             # Temporarily disconnect constraints if any
             for constraint in constraints:
@@ -1642,5 +1656,15 @@ class LimbModule(BaseModule):
             cmds.xform(knee_joint, rotation=knee_rot, worldSpace=True)
 
             print(f"Fix completed for {hip_joint}")
+
+        # Restore pole vector constraints that were deleted
+        if pole_vector_constraints and "pole" in self.controls and "ik_handle" in self.controls:
+            pole_ctrl = self.controls["pole"]
+            ik_handle = self.controls["ik_handle"]
+
+            if cmds.objExists(pole_ctrl) and cmds.objExists(ik_handle):
+                print(f"Restoring pole vector constraint for {self.module_id}")
+                cmds.poleVectorConstraint(pole_ctrl, ik_handle)
+                print(f"Pole vector constraint restored")
 
         print("=== HIP JOINT ORIENTATION FIX COMPLETE ===\n")
