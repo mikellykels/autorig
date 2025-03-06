@@ -163,6 +163,9 @@ class LimbModule(BaseModule):
         # Create joints
         self._create_joints()
 
+        # Ensure joint alignment - this fixes alignment/orientation issues
+        self._ensure_joint_alignment()
+
         # FIX JOINT ORIENTATIONS FIRST - moved this before control creation
         self._fix_joint_orientations()
 
@@ -250,59 +253,70 @@ class LimbModule(BaseModule):
         # Parent to the joint group
         cmds.parent(shoulder_jnt, self.joint_grp)
 
-        # ===== CREATE FK JOINT CHAIN =====
-        # Create the FK joint chain manually (don't duplicate)
-        cmds.select(clear=True)
+        # ===== CREATE FK JOINT CHAIN BY DUPLICATING MAIN CHAIN =====
+        # First, unparent the main chain for duplication
+        cmds.parent(shoulder_jnt, world=True)
 
-        # FK shoulder
-        fk_shoulder = cmds.joint(name=f"{self.module_id}_shoulder_fk_jnt", position=shoulder_pos)
-        self.joints["fk_shoulder"] = fk_shoulder
+        # Duplicate the main chain to ensure exact positioning
+        fk_chain = cmds.duplicate(shoulder_jnt, renameChildren=True, name=f"{self.module_id}_shoulder_fk_jnt")
 
-        # FK elbow
-        fk_elbow = cmds.joint(name=f"{self.module_id}_elbow_fk_jnt", position=elbow_pos)
-        self.joints["fk_elbow"] = fk_elbow
+        # Re-parent the main chain
+        cmds.parent(shoulder_jnt, self.joint_grp)
 
-        # FK wrist
-        fk_wrist = cmds.joint(name=f"{self.module_id}_wrist_fk_jnt", position=wrist_pos)
-        self.joints["fk_wrist"] = fk_wrist
+        # Store the FK joints
+        self.joints["fk_shoulder"] = fk_chain[0]
+        self.joints["fk_elbow"] = cmds.listRelatives(self.joints["fk_shoulder"], children=True, type="joint")[0]
+        self.joints["fk_wrist"] = cmds.listRelatives(self.joints["fk_elbow"], children=True, type="joint")[0]
+        self.joints["fk_hand"] = cmds.listRelatives(self.joints["fk_wrist"], children=True, type="joint")[0]
 
-        # FK hand
-        fk_hand = cmds.joint(name=f"{self.module_id}_hand_fk_jnt", position=hand_pos)
-        self.joints["fk_hand"] = fk_hand
+        # Rename the FK joints properly
+        cmds.rename(self.joints["fk_elbow"], f"{self.module_id}_elbow_fk_jnt")
+        cmds.rename(self.joints["fk_wrist"], f"{self.module_id}_wrist_fk_jnt")
+        cmds.rename(self.joints["fk_hand"], f"{self.module_id}_hand_fk_jnt")
 
-        # Orient the FK joint chain
-        cmds.joint(fk_shoulder, edit=True, orientJoint="xyz", secondaryAxisOrient="yup", children=True,
-                   zeroScaleOrient=True)
+        # Update the dictionary with new names
+        self.joints["fk_elbow"] = f"{self.module_id}_elbow_fk_jnt"
+        self.joints["fk_wrist"] = f"{self.module_id}_wrist_fk_jnt"
+        self.joints["fk_hand"] = f"{self.module_id}_hand_fk_jnt"
 
-        # Now parent the FK shoulder to the joint group
-        cmds.parent(fk_shoulder, self.joint_grp)
+        # Parent the FK chain to the joint group
+        cmds.parent(self.joints["fk_shoulder"], self.joint_grp)
 
-        # ===== CREATE IK JOINT CHAIN =====
-        # Create the IK joint chain manually (don't duplicate)
-        cmds.select(clear=True)
+        # ===== CREATE IK JOINT CHAIN BY DUPLICATING MAIN CHAIN =====
+        # Duplicate the main chain to ensure exact positioning
+        cmds.parent(shoulder_jnt, world=True)  # Unparent again for second duplication
+        ik_chain = cmds.duplicate(shoulder_jnt, renameChildren=True, name=f"{self.module_id}_shoulder_ik_jnt")
+        cmds.parent(shoulder_jnt, self.joint_grp)  # Re-parent main chain
 
-        # IK shoulder
-        ik_shoulder = cmds.joint(name=f"{self.module_id}_shoulder_ik_jnt", position=shoulder_pos)
-        self.joints["ik_shoulder"] = ik_shoulder
+        # Store the IK joints
+        self.joints["ik_shoulder"] = ik_chain[0]
+        self.joints["ik_elbow"] = cmds.listRelatives(self.joints["ik_shoulder"], children=True, type="joint")[0]
+        self.joints["ik_wrist"] = cmds.listRelatives(self.joints["ik_elbow"], children=True, type="joint")[0]
+        self.joints["ik_hand"] = cmds.listRelatives(self.joints["ik_wrist"], children=True, type="joint")[0]
 
-        # IK elbow
-        ik_elbow = cmds.joint(name=f"{self.module_id}_elbow_ik_jnt", position=elbow_pos)
-        self.joints["ik_elbow"] = ik_elbow
+        # Rename the IK joints properly
+        cmds.rename(self.joints["ik_elbow"], f"{self.module_id}_elbow_ik_jnt")
+        cmds.rename(self.joints["ik_wrist"], f"{self.module_id}_wrist_ik_jnt")
+        cmds.rename(self.joints["ik_hand"], f"{self.module_id}_hand_ik_jnt")
 
-        # IK wrist
-        ik_wrist = cmds.joint(name=f"{self.module_id}_wrist_ik_jnt", position=wrist_pos)
-        self.joints["ik_wrist"] = ik_wrist
+        # Update the dictionary with new names
+        self.joints["ik_elbow"] = f"{self.module_id}_elbow_ik_jnt"
+        self.joints["ik_wrist"] = f"{self.module_id}_wrist_ik_jnt"
+        self.joints["ik_hand"] = f"{self.module_id}_hand_ik_jnt"
 
-        # IK hand
-        ik_hand = cmds.joint(name=f"{self.module_id}_hand_ik_jnt", position=hand_pos)
-        self.joints["ik_hand"] = ik_hand
+        # Parent the IK chain to the joint group
+        cmds.parent(self.joints["ik_shoulder"], self.joint_grp)
 
-        # Orient the IK joint chain
-        cmds.joint(ik_shoulder, edit=True, orientJoint="xyz", secondaryAxisOrient="yup", children=True,
-                   zeroScaleOrient=True)
+        # Verify joint positions are identical
+        for joint_type in ["shoulder", "elbow", "wrist", "hand"]:
+            main_pos = cmds.xform(self.joints[joint_type], query=True, translation=True, worldSpace=True)
+            fk_pos = cmds.xform(self.joints[f"fk_{joint_type}"], query=True, translation=True, worldSpace=True)
+            ik_pos = cmds.xform(self.joints[f"ik_{joint_type}"], query=True, translation=True, worldSpace=True)
 
-        # Now parent the IK shoulder to the joint group
-        cmds.parent(ik_shoulder, self.joint_grp)
+            print(f"Joint position check - {joint_type}:")
+            print(f"  Main: {main_pos}")
+            print(f"  FK:   {fk_pos}")
+            print(f"  IK:   {ik_pos}")
 
         print(f"Created joint chains for {self.module_id}")
 
@@ -360,65 +374,80 @@ class LimbModule(BaseModule):
         # Parent to the joint group
         cmds.parent(hip_jnt, self.joint_grp)
 
-        # ===== CREATE FK JOINT CHAIN =====
-        # Create the FK joint chain manually
-        cmds.select(clear=True)
+        # ===== CREATE FK JOINT CHAIN BY DUPLICATING MAIN CHAIN =====
+        # First, unparent the main chain for duplication
+        cmds.parent(hip_jnt, world=True)
 
-        # FK hip
-        fk_hip = cmds.joint(name=f"{self.module_id}_hip_fk_jnt", position=hip_pos)
-        self.joints["fk_hip"] = fk_hip
+        # Duplicate the main chain to ensure exact positioning
+        fk_chain = cmds.duplicate(hip_jnt, renameChildren=True, name=f"{self.module_id}_hip_fk_jnt")
 
-        # FK knee
-        fk_knee = cmds.joint(name=f"{self.module_id}_knee_fk_jnt", position=knee_pos)
-        self.joints["fk_knee"] = fk_knee
+        # Re-parent the main chain
+        cmds.parent(hip_jnt, self.joint_grp)
 
-        # FK ankle
-        fk_ankle = cmds.joint(name=f"{self.module_id}_ankle_fk_jnt", position=ankle_pos)
-        self.joints["fk_ankle"] = fk_ankle
+        # Store the FK joints
+        self.joints["fk_hip"] = fk_chain[0]
+        self.joints["fk_knee"] = cmds.listRelatives(self.joints["fk_hip"], children=True, type="joint")[0]
+        self.joints["fk_ankle"] = cmds.listRelatives(self.joints["fk_knee"], children=True, type="joint")[0]
+        self.joints["fk_foot"] = cmds.listRelatives(self.joints["fk_ankle"], children=True, type="joint")[0]
+        self.joints["fk_toe"] = cmds.listRelatives(self.joints["fk_foot"], children=True, type="joint")[0]
 
-        # FK foot
-        fk_foot = cmds.joint(name=f"{self.module_id}_foot_fk_jnt", position=foot_pos)
-        self.joints["fk_foot"] = fk_foot
+        # Rename the FK joints properly
+        cmds.rename(self.joints["fk_knee"], f"{self.module_id}_knee_fk_jnt")
+        cmds.rename(self.joints["fk_ankle"], f"{self.module_id}_ankle_fk_jnt")
+        cmds.rename(self.joints["fk_foot"], f"{self.module_id}_foot_fk_jnt")
+        cmds.rename(self.joints["fk_toe"], f"{self.module_id}_toe_fk_jnt")
 
-        # FK toe
-        fk_toe = cmds.joint(name=f"{self.module_id}_toe_fk_jnt", position=toe_pos)
-        self.joints["fk_toe"] = fk_toe
+        # Update the dictionary with new names
+        self.joints["fk_knee"] = f"{self.module_id}_knee_fk_jnt"
+        self.joints["fk_ankle"] = f"{self.module_id}_ankle_fk_jnt"
+        self.joints["fk_foot"] = f"{self.module_id}_foot_fk_jnt"
+        self.joints["fk_toe"] = f"{self.module_id}_toe_fk_jnt"
 
-        # Orient the FK joint chain
-        cmds.joint(fk_hip, edit=True, orientJoint="xyz", secondaryAxisOrient="yup", children=True, zeroScaleOrient=True)
+        # Parent the FK chain to the joint group
+        cmds.parent(self.joints["fk_hip"], self.joint_grp)
 
-        # Parent the FK hip to the joint group
-        cmds.parent(fk_hip, self.joint_grp)
+        # ===== CREATE IK JOINT CHAIN BY DUPLICATING MAIN CHAIN =====
+        # Unparent again for second duplication
+        cmds.parent(hip_jnt, world=True)
 
-        # ===== CREATE IK JOINT CHAIN =====
-        # Create the IK joint chain manually
-        cmds.select(clear=True)
+        # Duplicate the main chain to ensure exact positioning
+        ik_chain = cmds.duplicate(hip_jnt, renameChildren=True, name=f"{self.module_id}_hip_ik_jnt")
 
-        # IK hip
-        ik_hip = cmds.joint(name=f"{self.module_id}_hip_ik_jnt", position=hip_pos)
-        self.joints["ik_hip"] = ik_hip
+        # Re-parent main chain
+        cmds.parent(hip_jnt, self.joint_grp)
 
-        # IK knee
-        ik_knee = cmds.joint(name=f"{self.module_id}_knee_ik_jnt", position=knee_pos)
-        self.joints["ik_knee"] = ik_knee
+        # Store the IK joints
+        self.joints["ik_hip"] = ik_chain[0]
+        self.joints["ik_knee"] = cmds.listRelatives(self.joints["ik_hip"], children=True, type="joint")[0]
+        self.joints["ik_ankle"] = cmds.listRelatives(self.joints["ik_knee"], children=True, type="joint")[0]
+        self.joints["ik_foot"] = cmds.listRelatives(self.joints["ik_ankle"], children=True, type="joint")[0]
+        self.joints["ik_toe"] = cmds.listRelatives(self.joints["ik_foot"], children=True, type="joint")[0]
 
-        # IK ankle
-        ik_ankle = cmds.joint(name=f"{self.module_id}_ankle_ik_jnt", position=ankle_pos)
-        self.joints["ik_ankle"] = ik_ankle
+        # Rename the IK joints properly
+        cmds.rename(self.joints["ik_knee"], f"{self.module_id}_knee_ik_jnt")
+        cmds.rename(self.joints["ik_ankle"], f"{self.module_id}_ankle_ik_jnt")
+        cmds.rename(self.joints["ik_foot"], f"{self.module_id}_foot_ik_jnt")
+        cmds.rename(self.joints["ik_toe"], f"{self.module_id}_toe_ik_jnt")
 
-        # IK foot
-        ik_foot = cmds.joint(name=f"{self.module_id}_foot_ik_jnt", position=foot_pos)
-        self.joints["ik_foot"] = ik_foot
+        # Update the dictionary with new names
+        self.joints["ik_knee"] = f"{self.module_id}_knee_ik_jnt"
+        self.joints["ik_ankle"] = f"{self.module_id}_ankle_ik_jnt"
+        self.joints["ik_foot"] = f"{self.module_id}_foot_ik_jnt"
+        self.joints["ik_toe"] = f"{self.module_id}_toe_ik_jnt"
 
-        # IK toe
-        ik_toe = cmds.joint(name=f"{self.module_id}_toe_ik_jnt", position=toe_pos)
-        self.joints["ik_toe"] = ik_toe
+        # Parent the IK chain to the joint group
+        cmds.parent(self.joints["ik_hip"], self.joint_grp)
 
-        # Orient the IK joint chain
-        cmds.joint(ik_hip, edit=True, orientJoint="xyz", secondaryAxisOrient="yup", children=True, zeroScaleOrient=True)
+        # Verify joint positions are identical
+        for joint_type in ["hip", "knee", "ankle", "foot", "toe"]:
+            main_pos = cmds.xform(self.joints[joint_type], query=True, translation=True, worldSpace=True)
+            fk_pos = cmds.xform(self.joints[f"fk_{joint_type}"], query=True, translation=True, worldSpace=True)
+            ik_pos = cmds.xform(self.joints[f"ik_{joint_type}"], query=True, translation=True, worldSpace=True)
 
-        # Parent the IK hip to the joint group
-        cmds.parent(ik_hip, self.joint_grp)
+            print(f"Joint position check - {joint_type}:")
+            print(f"  Main: {main_pos}")
+            print(f"  FK:   {fk_pos}")
+            print(f"  IK:   {ik_pos}")
 
         print(f"Created joint chains for {self.module_id}")
 
@@ -1668,3 +1697,60 @@ class LimbModule(BaseModule):
                 print(f"Pole vector constraint restored")
 
         print("=== HIP JOINT ORIENTATION FIX COMPLETE ===\n")
+
+    def _ensure_joint_alignment(self):
+        """
+        Ensure all three joint chains (main, FK, IK) have identical transformations.
+        This is called after initial joint creation to fix any alignment issues.
+        """
+        print(f"\n=== ENSURING JOINT ALIGNMENT FOR {self.module_id} ===")
+
+        # Determine joint names based on limb type
+        if self.limb_type == "arm":
+            joint_names = ["shoulder", "elbow", "wrist", "hand"]
+        else:  # leg
+            joint_names = ["hip", "knee", "ankle", "foot", "toe"]
+
+        # Get the transforms from the main joints and apply them to FK and IK
+        for joint_name in joint_names:
+            # Skip if any of the joints don't exist
+            if (joint_name not in self.joints or
+                    f"fk_{joint_name}" not in self.joints or
+                    f"ik_{joint_name}" not in self.joints):
+                print(f"Warning: Missing joint for {joint_name}, skipping alignment")
+                continue
+
+            main_joint = self.joints[joint_name]
+            fk_joint = self.joints[f"fk_{joint_name}"]
+            ik_joint = self.joints[f"ik_{joint_name}"]
+
+            # Get main joint transformations
+            main_pos = cmds.xform(main_joint, query=True, translation=True, worldSpace=True)
+            main_rot = cmds.xform(main_joint, query=True, rotation=True, worldSpace=True)
+            main_orient = cmds.getAttr(f"{main_joint}.jointOrient")[0]
+
+            print(f"Aligning {joint_name} joints:")
+            print(f"  Main joint position: {main_pos}")
+            print(f"  Main joint rotation: {main_rot}")
+            print(f"  Main joint orientation: {main_orient}")
+
+            # Apply transformations to FK joint
+            cmds.xform(fk_joint, translation=main_pos, worldSpace=True)
+            cmds.xform(fk_joint, rotation=main_rot, worldSpace=True)
+            cmds.setAttr(f"{fk_joint}.jointOrient", *main_orient)
+
+            # Apply transformations to IK joint
+            cmds.xform(ik_joint, translation=main_pos, worldSpace=True)
+            cmds.xform(ik_joint, rotation=main_rot, worldSpace=True)
+            cmds.setAttr(f"{ik_joint}.jointOrient", *main_orient)
+
+            # Verify alignment
+            fk_pos = cmds.xform(fk_joint, query=True, translation=True, worldSpace=True)
+            ik_pos = cmds.xform(ik_joint, query=True, translation=True, worldSpace=True)
+            fk_orient = cmds.getAttr(f"{fk_joint}.jointOrient")[0]
+            ik_orient = cmds.getAttr(f"{ik_joint}.jointOrient")[0]
+
+            print(f"  FK joint aligned: {fk_pos}, orient: {fk_orient}")
+            print(f"  IK joint aligned: {ik_pos}, orient: {ik_orient}")
+
+        print(f"=== JOINT ALIGNMENT COMPLETE FOR {self.module_id} ===\n")
