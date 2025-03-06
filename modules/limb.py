@@ -765,7 +765,7 @@ class LimbModule(BaseModule):
         hip_ctrl, hip_grp = create_control(
             f"{self.module_id}_hip_fk_ctrl",
             "circle",
-            5.0,  # Larger size
+            10.0,  # Larger size
             CONTROL_COLORS["fk"],
             normal=[1, 0, 0]  # This makes the circle face along X axis
         )
@@ -786,7 +786,7 @@ class LimbModule(BaseModule):
         knee_ctrl, knee_grp = create_control(
             f"{self.module_id}_knee_fk_ctrl",
             "circle",
-            4.0,  # Larger size
+            8.0,  # Larger size
             CONTROL_COLORS["fk"],
             normal=[1, 0, 0]  # This makes the circle face along X axis
         )
@@ -804,7 +804,7 @@ class LimbModule(BaseModule):
         ankle_ctrl, ankle_grp = create_control(
             f"{self.module_id}_ankle_fk_ctrl",
             "circle",
-            3.0,  # Larger size
+            6.0,  # Larger size
             CONTROL_COLORS["fk"],
             normal=[1, 0, 0]  # This makes the circle face along X axis
         )

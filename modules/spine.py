@@ -188,7 +188,7 @@ class SpineModule(BaseModule):
         ctrl, ctrl_grp = create_control(
             f"{self.module_id}_{first_spine}_ctrl",
             "circle",
-            2.0,
+            20.0,
             CONTROL_COLORS["main"],
             normal=[1, 0, 0]
         )
@@ -218,7 +218,7 @@ class SpineModule(BaseModule):
                 ctrl, ctrl_grp = create_control(
                     f"{self.module_id}_{guide_name}_ctrl",
                     "circle",
-                    2.0,
+                    20.0,
                     CONTROL_COLORS["main"],
                     normal=[1, 0, 0]
                 )
@@ -245,7 +245,7 @@ class SpineModule(BaseModule):
             ctrl, ctrl_grp = create_control(
                 f"{self.module_id}_chest_ctrl",
                 "circle",
-                2.5,
+                20.5,
                 CONTROL_COLORS["main"],
                 normal=[1, 0, 0]
             )
