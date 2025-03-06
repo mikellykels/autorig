@@ -697,6 +697,13 @@ class LimbModule(BaseModule):
         cmds.parent(wrist_ik_grp, self.control_grp)
         self.controls["ik_wrist"] = wrist_ik_ctrl
 
+        # Parent the IK handle under the wrist IK control
+        if "ik_handle" in self.controls and cmds.objExists(self.controls["ik_handle"]):
+            print(f"Parenting IK handle {self.controls['ik_handle']} to wrist IK control {wrist_ik_ctrl}")
+            cmds.parent(self.controls["ik_handle"], wrist_ik_ctrl)
+        else:
+            print(f"Warning: IK handle not found for parenting to wrist IK control {wrist_ik_ctrl}")
+
         # Pole vector control - use sphere
         pole_pos = cmds.xform(self.guides["pole"], query=True, translation=True, worldSpace=True)
 
@@ -722,17 +729,11 @@ class LimbModule(BaseModule):
                 if cmds.objExists(constraint):
                     cmds.delete(constraint)
 
-            # Point constrain IK handle to wrist control (position only)
-            cmds.pointConstraint(self.controls["ik_wrist"], ik_handle, maintainOffset=True)
-
             # Add pole vector constraint
             cmds.poleVectorConstraint(self.controls["pole"], ik_handle)
 
         # Orient constraint for IK wrist - controls rotation independent of IK handle
         cmds.orientConstraint(self.controls["ik_wrist"], self.joints["ik_wrist"], maintainOffset=True)
-
-        # Connect IK hand - make it follow the IK wrist joint explicitly
-        cmds.parentConstraint(self.joints["ik_wrist"], self.joints["ik_hand"], maintainOffset=True)
 
         print("Arm controls creation complete")
 
