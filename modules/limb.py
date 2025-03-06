@@ -770,12 +770,9 @@ class LimbModule(BaseModule):
             normal=[1, 0, 0]  # This makes the circle face along X axis
         )
 
-        # IMPROVED ALIGNMENT METHOD: Use a temporary parent constraint to match the joint's transform exactly
-        print(f"Aligning hip control to joint: {hip_jnt}")
-        print(f"Joint orientation before constraint: {cmds.getAttr(hip_jnt + '.jointOrient')[0]}")
+        # Use a temporary parent constraint to match the joint's transform exactly
         temp_constraint = cmds.parentConstraint(hip_jnt, hip_grp, maintainOffset=False)[0]
         cmds.delete(temp_constraint)
-        print(f"Control group rotation after constraint: {cmds.getAttr(hip_grp + '.rotate')[0]}")
 
         cmds.parent(hip_grp, self.control_grp)
         self.controls["fk_hip"] = hip_ctrl

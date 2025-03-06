@@ -121,10 +121,27 @@ class ModuleManager:
             self._mirror_joints(left_module, right_module)
             self._mirror_ik_handles(left_module, right_module)
 
-        # Clear any existing controls in the right module that might cause conflicts
+        # Store important references before clearing controls
+        ik_handle = right_module.controls.get("ik_handle", None)
+        foot_roll_grp = right_module.controls.get("foot_roll_grp", None)
+        heel_pivot = right_module.controls.get("heel_pivot", None)
+        toe_pivot = right_module.controls.get("toe_pivot", None)
+        ball_pivot = right_module.controls.get("ball_pivot", None)
+        ankle_pivot = right_module.controls.get("ankle_pivot", None)
+        ankle_foot_ik = right_module.controls.get("ankle_foot_ik", None)
+        foot_toe_ik = right_module.controls.get("foot_toe_ik", None)
+
+        # Clear existing controls excluding the IK handles and foot roll groups
         if right_module.controls:
-            print("Clearing existing controls in target module")
+            print("Clearing existing controls in target module (preserving IK handles and foot roll groups)")
+            preserved_nodes = ["ik_handle", "foot_roll_grp", "heel_pivot", "toe_pivot",
+                               "ball_pivot", "ankle_pivot", "ankle_foot_ik", "foot_toe_ik"]
+
             for ctrl_name, ctrl in list(right_module.controls.items()):
+                if ctrl_name in preserved_nodes:
+                    # Skip preserved nodes
+                    continue
+
                 if cmds.objExists(ctrl):
                     grp_name = f"{ctrl}_grp"
                     if cmds.objExists(grp_name):
@@ -133,13 +150,30 @@ class ModuleManager:
                     else:
                         print(f"Deleting control: {ctrl}")
                         cmds.delete(ctrl)
+
+            # Clear and then restore preserved controls
+            controls_backup = {}
+            for node in preserved_nodes:
+                if node in right_module.controls:
+                    controls_backup[node] = right_module.controls[node]
+
             right_module.controls = {}
+
+            # Restore preserved nodes
+            for node, value in controls_backup.items():
+                if cmds.objExists(value):  # Only restore if the node still exists
+                    right_module.controls[node] = value
+                    print(f"Preserved control: {node} = {value}")
 
         # Now call the appropriate creation method based on module type
         if right_module.module_type == "leg":
             print("Building leg controls for mirrored module")
             right_module._create_leg_controls()
             right_module._create_fkik_switch()
+
+            # Set up IK constraints
+            self._setup_mirrored_ik_constraints_for_leg(right_module)
+
             right_module._setup_ikfk_blending()
             right_module._finalize_fkik_switch()
 
@@ -151,11 +185,143 @@ class ModuleManager:
             print("Building arm controls for mirrored module")
             right_module._create_arm_controls()
             right_module._create_fkik_switch()
+
+            # Set up IK constraints
+            self._setup_mirrored_ik_constraints_for_arm(right_module)
+
             right_module._setup_ikfk_blending()
             right_module._finalize_fkik_switch()
 
         print(f"=== MIRRORED MODULE BUILD COMPLETE: {right_module.module_id} ===\n")
         return True
+
+    def _setup_mirrored_ik_constraints_for_arm(self, module):
+        """
+        Set up IK constraints specifically for a mirrored arm module.
+        This ensures all IK controls are properly connected to IK joints and handles.
+
+        Args:
+            module (BaseModule): The mirrored arm module
+        """
+        print(f"Setting up IK constraints for mirrored arm: {module.module_id}")
+
+        # Verify IK handle exists
+        if "ik_handle" not in module.controls or not cmds.objExists(module.controls["ik_handle"]):
+            print("IK handle not found, cannot set up constraints")
+            return
+
+        # Make sure we have IK wrist and pole controls
+        if not all(key in module.controls for key in ["ik_wrist", "pole"]):
+            print("Missing IK controls. Make sure controls were created before setting up constraints.")
+            return
+
+        if not all(key in module.joints for key in ["ik_wrist", "ik_hand"]):
+            print("Missing required IK joints, cannot set up constraints")
+            return
+
+        # Get the IK handle and controls
+        ik_handle = module.controls["ik_handle"]
+        wrist_ctrl = module.controls["ik_wrist"]
+        pole_ctrl = module.controls["pole"]
+
+        # Clear existing constraints on the IK handle
+        constraints = cmds.listConnections(ik_handle, source=True, destination=True, type="constraint") or []
+        for constraint in constraints:
+            if cmds.objExists(constraint):
+                print(f"Deleting existing constraint: {constraint}")
+                cmds.delete(constraint)
+
+        # Set up constraints
+        print(f"Creating point constraint from {wrist_ctrl} to {ik_handle}")
+        cmds.pointConstraint(wrist_ctrl, ik_handle, maintainOffset=True)
+
+        print(f"Creating pole vector constraint from {pole_ctrl} to {ik_handle}")
+        cmds.poleVectorConstraint(pole_ctrl, ik_handle)
+
+        # Orient constraint for IK wrist joint
+        print(f"Creating orient constraint from {wrist_ctrl} to {module.joints['ik_wrist']}")
+        cmds.orientConstraint(wrist_ctrl, module.joints["ik_wrist"], maintainOffset=True)
+
+        # The hand joint can still follow the wrist joint in the arm setup
+        # (since there's no complex foot roll system like in the leg)
+        print(f"Creating parent constraint from {module.joints['ik_wrist']} to {module.joints['ik_hand']}")
+        cmds.parentConstraint(module.joints["ik_wrist"], module.joints["ik_hand"], maintainOffset=True)
+
+        print(f"IK constraints setup complete for {module.module_id}")
+
+    def _setup_mirrored_ik_constraints_for_leg(self, module):
+        """
+        Set up IK constraints specifically for a mirrored leg module.
+        This ensures all IK controls are properly connected to IK joints and handles.
+
+        Args:
+            module (BaseModule): The mirrored leg module
+        """
+        print(f"Setting up IK constraints for mirrored leg: {module.module_id}")
+
+        # Verify IK handle and foot roll components exist
+        if "ik_handle" not in module.controls or not cmds.objExists(module.controls["ik_handle"]):
+            print("IK handle not found, cannot set up constraints")
+            return
+
+        if not all(key in module.controls for key in ["ik_ankle", "pole", "foot_roll_grp", "ankle_pivot"]):
+            print("Missing required controls for leg IK setup")
+            return
+
+        # Get the components
+        ik_handle = module.controls["ik_handle"]
+        ankle_ctrl = module.controls["ik_ankle"]
+        pole_ctrl = module.controls["pole"]
+        foot_roll_grp = module.controls["foot_roll_grp"]
+        ankle_pivot = module.controls["ankle_pivot"]
+
+        # IMPORTANT: We need to fix the connections in a specific order
+
+        # 1. Temporarily unparent the IK handle from the foot roll system
+        print(f"Temporarily unparenting IK handle from foot roll system")
+        ik_handle_parent = cmds.listRelatives(ik_handle, parent=True)[0]
+        ik_handle_grp = f"{module.module_id}_leg_ikh_grp"
+        temp_grp = cmds.group(empty=True, name=f"{module.module_id}_temp_grp")
+        cmds.parent(ik_handle, temp_grp)
+
+        # 2. Clear existing constraints on the IK handle
+        constraints = cmds.listConnections(ik_handle, source=True, destination=True, type="constraint") or []
+        for constraint in constraints:
+            if cmds.objExists(constraint):
+                print(f"Deleting existing constraint: {constraint}")
+                cmds.delete(constraint)
+
+        # 3. Create pole vector constraint while IK handle is in neutral space
+        print(f"Creating pole vector constraint from {pole_ctrl} to {ik_handle}")
+        pv_constraint = cmds.poleVectorConstraint(pole_ctrl, ik_handle)
+        print(f"Created pole vector constraint: {pv_constraint}")
+
+        # 4. Reparent IK handle back to foot roll system
+        print(f"Reparenting IK handle back to foot roll system")
+        cmds.parent(ik_handle, ankle_pivot)
+        cmds.delete(temp_grp)
+
+        # 5. Connect ankle control to foot roll group
+        print(f"Creating parent constraint from {ankle_ctrl} to {foot_roll_grp}")
+        # Clear existing constraints
+        foot_constraints = cmds.listConnections(foot_roll_grp, source=True, destination=True, type="constraint") or []
+        for constraint in foot_constraints:
+            if cmds.objExists(constraint):
+                cmds.delete(constraint)
+
+        # Create new constraint
+        cmds.parentConstraint(
+            ankle_ctrl,
+            foot_roll_grp,
+            maintainOffset=True,
+            name=f"{module.module_id}_footRoll_parentConstraint"
+        )
+
+        # 6. Orient constraint for IK ankle joint - IMPORTANT: ONLY ORIENT, no parent constraint
+        print(f"Creating orient constraint from {ankle_ctrl} to {module.joints['ik_ankle']}")
+        cmds.orientConstraint(ankle_ctrl, module.joints["ik_ankle"], maintainOffset=True)
+
+        print(f"IK constraints setup complete for {module.module_id}")
 
     def mirror_modules(self):
         """
