@@ -163,9 +163,6 @@ class LimbModule(BaseModule):
         # Create joints
         self._create_joints()
 
-        # Ensure joint alignment - this fixes alignment/orientation issues
-        self._ensure_joint_alignment()
-
         # FIX JOINT ORIENTATIONS FIRST - moved this before control creation
         self._fix_joint_orientations()
 
@@ -1697,60 +1694,3 @@ class LimbModule(BaseModule):
                 print(f"Pole vector constraint restored")
 
         print("=== HIP JOINT ORIENTATION FIX COMPLETE ===\n")
-
-    def _ensure_joint_alignment(self):
-        """
-        Ensure all three joint chains (main, FK, IK) have identical transformations.
-        This is called after initial joint creation to fix any alignment issues.
-        """
-        print(f"\n=== ENSURING JOINT ALIGNMENT FOR {self.module_id} ===")
-
-        # Determine joint names based on limb type
-        if self.limb_type == "arm":
-            joint_names = ["shoulder", "elbow", "wrist", "hand"]
-        else:  # leg
-            joint_names = ["hip", "knee", "ankle", "foot", "toe"]
-
-        # Get the transforms from the main joints and apply them to FK and IK
-        for joint_name in joint_names:
-            # Skip if any of the joints don't exist
-            if (joint_name not in self.joints or
-                    f"fk_{joint_name}" not in self.joints or
-                    f"ik_{joint_name}" not in self.joints):
-                print(f"Warning: Missing joint for {joint_name}, skipping alignment")
-                continue
-
-            main_joint = self.joints[joint_name]
-            fk_joint = self.joints[f"fk_{joint_name}"]
-            ik_joint = self.joints[f"ik_{joint_name}"]
-
-            # Get main joint transformations
-            main_pos = cmds.xform(main_joint, query=True, translation=True, worldSpace=True)
-            main_rot = cmds.xform(main_joint, query=True, rotation=True, worldSpace=True)
-            main_orient = cmds.getAttr(f"{main_joint}.jointOrient")[0]
-
-            print(f"Aligning {joint_name} joints:")
-            print(f"  Main joint position: {main_pos}")
-            print(f"  Main joint rotation: {main_rot}")
-            print(f"  Main joint orientation: {main_orient}")
-
-            # Apply transformations to FK joint
-            cmds.xform(fk_joint, translation=main_pos, worldSpace=True)
-            cmds.xform(fk_joint, rotation=main_rot, worldSpace=True)
-            cmds.setAttr(f"{fk_joint}.jointOrient", *main_orient)
-
-            # Apply transformations to IK joint
-            cmds.xform(ik_joint, translation=main_pos, worldSpace=True)
-            cmds.xform(ik_joint, rotation=main_rot, worldSpace=True)
-            cmds.setAttr(f"{ik_joint}.jointOrient", *main_orient)
-
-            # Verify alignment
-            fk_pos = cmds.xform(fk_joint, query=True, translation=True, worldSpace=True)
-            ik_pos = cmds.xform(ik_joint, query=True, translation=True, worldSpace=True)
-            fk_orient = cmds.getAttr(f"{fk_joint}.jointOrient")[0]
-            ik_orient = cmds.getAttr(f"{ik_joint}.jointOrient")[0]
-
-            print(f"  FK joint aligned: {fk_pos}, orient: {fk_orient}")
-            print(f"  IK joint aligned: {ik_pos}, orient: {ik_orient}")
-
-        print(f"=== JOINT ALIGNMENT COMPLETE FOR {self.module_id} ===\n")
