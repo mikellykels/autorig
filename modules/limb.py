@@ -540,7 +540,7 @@ class LimbModule(BaseModule):
 
         # Get guide positions
         positions = []
-        guide_names = ["clavicle", "shoulder", "elbow", "wrist", "hand"]  # Added clavicle
+        guide_names = ["clavicle", "shoulder", "elbow", "wrist", "hand"]
 
         # Collect positions and verify all guides exist
         print("\n=== COLLECTING GUIDE POSITIONS FOR JOINT CREATION ===")
@@ -599,7 +599,7 @@ class LimbModule(BaseModule):
 
         # Create joint names
         joint_names = [
-            f"{self.module_id}_clavicle_jnt",  # Added clavicle
+            f"{self.module_id}_clavicle_jnt",
             f"{self.module_id}_shoulder_jnt",
             f"{self.module_id}_elbow_jnt",
             f"{self.module_id}_wrist_jnt",
@@ -665,7 +665,7 @@ class LimbModule(BaseModule):
 
         # FK joint names
         fk_joint_names = [
-            f"{self.module_id}_clavicle_fk_jnt",  # Added clavicle
+            f"{self.module_id}_clavicle_fk_jnt",
             f"{self.module_id}_shoulder_fk_jnt",
             f"{self.module_id}_elbow_fk_jnt",
             f"{self.module_id}_wrist_fk_jnt",
@@ -726,7 +726,7 @@ class LimbModule(BaseModule):
 
         # IK joint names
         ik_joint_names = [
-            f"{self.module_id}_clavicle_ik_jnt",  # Added clavicle
+            f"{self.module_id}_clavicle_ik_jnt",
             f"{self.module_id}_shoulder_ik_jnt",
             f"{self.module_id}_elbow_ik_jnt",
             f"{self.module_id}_wrist_ik_jnt",
