@@ -214,7 +214,7 @@ class SpineModule(BaseModule):
                 print(f"Pelvis position adjusted to align with COG for {self.module_id}")
 
     def _create_spine_joints_with_orientation(self):
-        """Create spine joints with proper orientation."""
+        """Create spine joints with proper hierarchy and specific orientation for each section."""
         # First, clear any existing joints
         self._clear_existing_spine_joints()
 
@@ -252,32 +252,8 @@ class SpineModule(BaseModule):
             joint_name = f"{self.module_id}_{guide_name}_jnt"
             joint_names.append(joint_name)
 
-        # CRITICAL FIX: Create joints one by one with explicit positioning
-        created_joints = []
-
-        # Create the first joint (pelvis)
-        cmds.select(clear=True)
-        first_joint = cmds.joint(name=joint_names[0], p=positions[0])
-        cmds.parent(first_joint, self.joint_grp)
-        created_joints.append(first_joint)
-        self.joints[guide_sequence[0]] = first_joint
-        print(f"Created root joint: {first_joint} at {positions[0]}")
-
-        # Create each child joint
-        for i in range(1, len(joint_names)):
-            cmds.select(created_joints[i - 1])  # Select the parent
-            joint = cmds.joint(name=joint_names[i], p=positions[i])
-            created_joints.append(joint)
-            self.joints[guide_sequence[i]] = joint
-            print(f"Created joint: {joint} at {positions[i]}")
-
-        # Orient the joints
-        if created_joints:
-            cmds.select(created_joints[0])
-            cmds.joint(edit=True, orientJoint="xyz", secondaryAxisOrient="yup", children=True, zeroScaleOrient=True)
-            print("Applied orientation to spine chain")
-
-        # Create the COG joint separately
+        # Create COG joint first
+        cog_joint = None
         if "cog" in self.guides:
             # Get COG position
             cog_pos = cmds.xform(self.guides["cog"], query=True, translation=True, worldSpace=True)
@@ -294,17 +270,75 @@ class SpineModule(BaseModule):
             cmds.setAttr(f"{cog_joint}.jointOrient", 0, 0, 0)
             print(f"Created COG joint: {cog_joint} at {cog_pos}")
 
-        # After creating all the joints, explicitly copy orientation from last spine to chest
+        # Create pelvis as child of COG
+        cmds.select(clear=True)
+        if cog_joint:
+            cmds.select(cog_joint)
+        pelvis_joint = cmds.joint(name=joint_names[0], p=positions[0])
+        if not cog_joint:
+            cmds.parent(pelvis_joint, self.joint_grp)
+        self.joints[guide_sequence[0]] = pelvis_joint
+        print(f"Created pelvis joint: {pelvis_joint} at {positions[0]}")
+
+        # Create spine_01 as a child of COG (not pelvis)
+        cmds.select(clear=True)
+        if cog_joint:
+            cmds.select(cog_joint)
+        else:
+            cmds.select(self.joint_grp)
+        spine01_joint = cmds.joint(name=joint_names[1], p=positions[1])
+        self.joints[guide_sequence[1]] = spine01_joint
+        print(f"Created spine_01 joint: {spine01_joint} at {positions[1]}")
+
+        # Create spine_02
+        if self.num_joints >= 2:
+            cmds.select(spine01_joint)
+            spine02_joint = cmds.joint(name=joint_names[2], p=positions[2])
+            self.joints[guide_sequence[2]] = spine02_joint
+            print(f"Created spine_02 joint: {spine02_joint} at {positions[2]}")
+
+        # Create spine_03 and beyond with their children
+        if self.num_joints >= 3:
+            for i in range(3, len(joint_names)):
+                prev_joint = self.joints[guide_sequence[i - 1]]
+                cmds.select(prev_joint)
+                joint = cmds.joint(name=joint_names[i], p=positions[i])
+                self.joints[guide_sequence[i]] = joint
+                print(f"Created joint: {joint} at {positions[i]}")
+
+        # Orient joints in specific sections as requested:
+
+        # First section (up to spine_02): Use yup
+        if "spine_01" in self.joints:
+            # Start from the first spine joint
+            cmds.select(self.joints["spine_01"])
+
+            # If spine_02 exists, orient both with yup
+            if "spine_02" in self.joints:
+                print("Orienting first spine section with xyz/yup")
+                cmds.joint(edit=True, orientJoint="xyz", secondaryAxisOrient="yup", children=True, zeroScaleOrient=True)
+
+        # Second section (spine_03 and spine_04): Use zdown
+        for i in range(3, min(self.num_joints + 1, 5)):  # spine_03 and spine_04 if they exist
+            joint_name = f"spine_{i:02d}"
+            if joint_name in self.joints:
+                print(f"Orienting {joint_name} with xyz/zdown")
+                cmds.select(self.joints[joint_name])
+                cmds.joint(edit=True, orientJoint="xyz", secondaryAxisOrient="zdown", zeroScaleOrient=True)
+
+        # Make sure chest follows the orientation of the last spine joint
         if "chest" in self.joints and f"spine_{self.num_joints:02d}" in self.joints:
-            chest_joint = self.joints["chest"]
             last_spine = self.joints[f"spine_{self.num_joints:02d}"]
+            chest_joint = self.joints["chest"]
 
-            # Force the chest joint orientation to match the previous joint
-            prev_orient = cmds.getAttr(f"{last_spine}.jointOrient")[0]
-            cmds.setAttr(f"{chest_joint}.jointOrient", prev_orient[0], prev_orient[1], prev_orient[2])
-            print(f"Explicitly matched chest joint orientation to previous spine joint: {prev_orient}")
+            # Get orientation from last spine joint
+            last_orient = cmds.getAttr(f"{last_spine}.jointOrient")[0]
 
-        print("Spine joint creation complete")
+            # Apply to chest joint
+            cmds.setAttr(f"{chest_joint}.jointOrient", last_orient[0], last_orient[1], last_orient[2])
+            print(f"Matched chest joint orientation to last spine: {last_orient}")
+
+        print("Spine joint creation complete with proper hierarchy and orientation")
 
     def _clear_existing_spine_joints(self):
         """Clear any existing spine joints before creating new ones."""
@@ -327,7 +361,7 @@ class SpineModule(BaseModule):
         self.joints = {}
 
     def _create_spine_controls(self):
-        """Create the spine controls with improved orientation and structure."""
+        """Create the spine controls with proper hierarchy and no pelvis control."""
         print(f"Creating spine controls for {self.module_id}")
 
         # Clear any existing controls
@@ -336,6 +370,8 @@ class SpineModule(BaseModule):
         # Create COG control as the root
         if "cog" in self.joints:
             self._create_cog_control()
+
+        # No pelvis control - removed
 
         # Create spine controls in sequence, starting from spine_01 under COG
         for i in range(1, self.num_joints + 1):
@@ -397,32 +433,6 @@ class SpineModule(BaseModule):
 
         # Store in controls dictionary
         self.controls["cog"] = cog_ctrl
-
-    def _create_pelvis_control(self):
-        """Create the pelvis control."""
-        pelvis_joint = self.joints["pelvis"]
-        pelvis_pos = cmds.xform(pelvis_joint, query=True, translation=True, worldSpace=True)
-
-        # Create control with reduced size
-        pelvis_ctrl, pelvis_grp = create_control(
-            f"{self.module_id}_pelvis_ctrl",
-            "cube",  # Cube shape for pelvis
-            9.0,  # Reduced size (was 18.0)
-            CONTROL_COLORS["main"],  # Yellow color
-            parent=self.control_grp
-        )
-
-        # Position and orient to match joint
-        cmds.xform(pelvis_grp, translation=pelvis_pos, worldSpace=True)
-        temp_constraint = cmds.orientConstraint(pelvis_joint, pelvis_grp, maintainOffset=False)[0]
-        cmds.delete(temp_constraint)
-
-        # Parent to COG if it exists
-        if "cog" in self.controls:
-            cmds.parent(pelvis_grp, self.controls["cog"])
-
-        # Store in controls dictionary
-        self.controls["pelvis"] = pelvis_ctrl
 
     def _create_spine_control(self, spine_name, index, parent_to_cog=False):
         """Create a control for a spine joint."""
