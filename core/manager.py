@@ -50,6 +50,20 @@ class ModuleManager:
         self.controls_grp = cmds.group(empty=True, name=f"{self.character_name}_controls")
         cmds.parent(self.controls_grp, self.rig_grp)
 
+        # Create cluster handles group under guides group
+        self.clusters_grp = cmds.group(empty=True, name=f"{self.character_name}_clusters")
+
+        # Verify group was created before setting visibility
+        if cmds.objExists(self.clusters_grp):
+            cmds.parent(self.clusters_grp, self.guides_grp)
+            # Set visibility off by default
+            try:
+                cmds.setAttr(f"{self.clusters_grp}.visibility", 0)
+            except Exception as e:
+                print(f"Warning: Could not set visibility for clusters group: {e}")
+        else:
+            print(f"Error: Could not create clusters group {self.character_name}_clusters")
+
     def register_module(self, module):
         """
         Register a new module.
@@ -69,6 +83,8 @@ class ModuleManager:
         """Build all registered modules."""
         for module_id, module in self.modules.items():
             module.build()
+
+        self.organize_clusters()
 
     def save_guide_positions(self, file_path):
         """
@@ -974,3 +990,54 @@ class ModuleManager:
                     print(f"Created reverse foot pivot system for {target_module.module_id}")
 
         print(f"=== IK HANDLE MIRRORING COMPLETE: {source_module.module_id} to {target_module.module_id} ===\n")
+
+    def organize_clusters(self):
+        """
+        Collect and group all cluster handles.
+
+        Returns:
+            int: Number of clusters organized
+        """
+        # Find all nodes ending with 'Handle'
+        all_clusters = cmds.ls("*Handle", type="transform")
+
+        # Filter to only include actual cluster handles
+        rig_clusters = []
+        for cluster in all_clusters:
+            # Verify it's a cluster handle
+            if cmds.listRelatives(cluster, shapes=True, type="clusterHandle"):
+                rig_clusters.append(cluster)
+
+        # If no clusters found, return
+        if not rig_clusters:
+            print("No clusters found.")
+            return 0
+
+        try:
+            # Clear selection first
+            cmds.select(clear=True)
+
+            # Select all cluster handles
+            cmds.select(rig_clusters)
+
+            # Check if clusters group already exists
+            if cmds.objExists(self.clusters_grp):
+                # If it exists, use it as the parent
+                grouped_clusters = cmds.group(name=f"{self.character_name}_clusters_grp")
+                cmds.parent(grouped_clusters, self.clusters_grp)
+            else:
+                # If it doesn't exist, create as before
+                grouped_clusters = cmds.group(name=f"{self.character_name}_clusters")
+
+            # Set visibility off
+            cmds.setAttr(f"{grouped_clusters}.visibility", 0)
+
+            # Clear selection
+            cmds.select(clear=True)
+
+            print(f"Organized {len(rig_clusters)} clusters into {grouped_clusters}")
+            return len(rig_clusters)
+
+        except Exception as e:
+            print(f"Error organizing clusters: {e}")
+            return 0

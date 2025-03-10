@@ -58,6 +58,7 @@ class LimbModule(BaseModule):
         """
         if self.limb_type == "arm":
             return {
+                "clavicle": (5 if self.side == "l" else -5, 130, 0),
                 "shoulder": (5 if self.side == "l" else -5, 15, 0),
                 "elbow": (10 if self.side == "l" else -10, 15, -2),
                 "wrist": (15 if self.side == "l" else -15, 15, 0),
@@ -227,6 +228,11 @@ class LimbModule(BaseModule):
         # 4. Create FK chain
         print("\n--- STEP 4: CREATING FK CHAIN ---")
         self._create_fk_chain()
+
+        # 4.5 Create clavicle setup if this is an arm
+        if self.limb_type == "arm":
+            print("\n--- STEP 4.5: CREATING CLAVICLE SETUP ---")
+            self._create_clavicle_setup()
 
         # 5. Create controls
         print("\n--- STEP 5: CREATING CONTROLS ---")
@@ -528,13 +534,13 @@ class LimbModule(BaseModule):
         self.joints = {}
 
     def _create_arm_joint_chains(self):
-        """Create arm joint chains with proper orientation."""
+        """Create arm joint chains with proper orientation including clavicle."""
         # Debug: Dump guide positions before creating joints
         self.debug_dump_guide_positions("BEFORE JOINT CREATION")
 
         # Get guide positions
         positions = []
-        guide_names = ["shoulder", "elbow", "wrist", "hand"]
+        guide_names = ["clavicle", "shoulder", "elbow", "wrist", "hand"]  # Added clavicle
 
         # Collect positions and verify all guides exist
         print("\n=== COLLECTING GUIDE POSITIONS FOR JOINT CREATION ===")
@@ -593,6 +599,7 @@ class LimbModule(BaseModule):
 
         # Create joint names
         joint_names = [
+            f"{self.module_id}_clavicle_jnt",  # Added clavicle
             f"{self.module_id}_shoulder_jnt",
             f"{self.module_id}_elbow_jnt",
             f"{self.module_id}_wrist_jnt",
@@ -605,38 +612,44 @@ class LimbModule(BaseModule):
 
         # Create each joint manually
         try:
-            # First joint at shoulder
+            # First joint at clavicle
             cmds.select(self.joint_grp)
-            shoulder_jnt = cmds.joint(name=joint_names[0])
-            cmds.xform(shoulder_jnt, translation=positions[0], worldSpace=True)
+            clavicle_jnt = cmds.joint(name=joint_names[0])
+            cmds.xform(clavicle_jnt, translation=positions[0], worldSpace=True)
 
-            # Second joint at elbow
+            # Second joint at shoulder
+            cmds.select(clavicle_jnt)
+            shoulder_jnt = cmds.joint(name=joint_names[1])
+            cmds.xform(shoulder_jnt, translation=positions[1], worldSpace=True)
+
+            # Third joint at elbow
             cmds.select(shoulder_jnt)
-            elbow_jnt = cmds.joint(name=joint_names[1])
-            cmds.xform(elbow_jnt, translation=positions[1], worldSpace=True)
+            elbow_jnt = cmds.joint(name=joint_names[2])
+            cmds.xform(elbow_jnt, translation=positions[2], worldSpace=True)
 
-            # Third joint at wrist
+            # Fourth joint at wrist
             cmds.select(elbow_jnt)
-            wrist_jnt = cmds.joint(name=joint_names[2])
-            cmds.xform(wrist_jnt, translation=positions[2], worldSpace=True)
+            wrist_jnt = cmds.joint(name=joint_names[3])
+            cmds.xform(wrist_jnt, translation=positions[3], worldSpace=True)
 
-            # Fourth joint at hand
+            # Fifth joint at hand
             cmds.select(wrist_jnt)
-            hand_jnt = cmds.joint(name=joint_names[3])
-            cmds.xform(hand_jnt, translation=positions[3], worldSpace=True)
+            hand_jnt = cmds.joint(name=joint_names[4])
+            cmds.xform(hand_jnt, translation=positions[4], worldSpace=True)
 
             # Store in dictionary
+            self.joints["clavicle"] = clavicle_jnt
             self.joints["shoulder"] = shoulder_jnt
             self.joints["elbow"] = elbow_jnt
             self.joints["wrist"] = wrist_jnt
             self.joints["hand"] = hand_jnt
 
             # Orient joints
-            cmds.select(shoulder_jnt)
+            cmds.select(clavicle_jnt)
             cmds.joint(edit=True, orientJoint="xyz", secondaryAxisOrient="yup", children=True, zeroScaleOrient=True)
 
             # Verify final positions
-            for joint_name in ["shoulder", "elbow", "wrist", "hand"]:
+            for joint_name in ["clavicle", "shoulder", "elbow", "wrist", "hand"]:
                 if joint_name in self.joints:
                     pos = cmds.xform(self.joints[joint_name], query=True, translation=True, worldSpace=True)
                     print(f"  {joint_name}: {pos}")
@@ -652,6 +665,7 @@ class LimbModule(BaseModule):
 
         # FK joint names
         fk_joint_names = [
+            f"{self.module_id}_clavicle_fk_jnt",  # Added clavicle
             f"{self.module_id}_shoulder_fk_jnt",
             f"{self.module_id}_elbow_fk_jnt",
             f"{self.module_id}_wrist_fk_jnt",
@@ -660,38 +674,44 @@ class LimbModule(BaseModule):
 
         # Create FK joints directly
         try:
-            # First joint at shoulder
+            # First joint at clavicle
             cmds.select(self.joint_grp)
-            fk_shoulder_jnt = cmds.joint(name=fk_joint_names[0])
-            cmds.xform(fk_shoulder_jnt, translation=positions[0], worldSpace=True)
+            fk_clavicle_jnt = cmds.joint(name=fk_joint_names[0])
+            cmds.xform(fk_clavicle_jnt, translation=positions[0], worldSpace=True)
 
-            # Second joint at elbow
+            # Second joint at shoulder
+            cmds.select(fk_clavicle_jnt)
+            fk_shoulder_jnt = cmds.joint(name=fk_joint_names[1])
+            cmds.xform(fk_shoulder_jnt, translation=positions[1], worldSpace=True)
+
+            # Third joint at elbow
             cmds.select(fk_shoulder_jnt)
-            fk_elbow_jnt = cmds.joint(name=fk_joint_names[1])
-            cmds.xform(fk_elbow_jnt, translation=positions[1], worldSpace=True)
+            fk_elbow_jnt = cmds.joint(name=fk_joint_names[2])
+            cmds.xform(fk_elbow_jnt, translation=positions[2], worldSpace=True)
 
-            # Third joint at wrist
+            # Fourth joint at wrist
             cmds.select(fk_elbow_jnt)
-            fk_wrist_jnt = cmds.joint(name=fk_joint_names[2])
-            cmds.xform(fk_wrist_jnt, translation=positions[2], worldSpace=True)
+            fk_wrist_jnt = cmds.joint(name=fk_joint_names[3])
+            cmds.xform(fk_wrist_jnt, translation=positions[3], worldSpace=True)
 
-            # Fourth joint at hand
+            # Fifth joint at hand
             cmds.select(fk_wrist_jnt)
-            fk_hand_jnt = cmds.joint(name=fk_joint_names[3])
-            cmds.xform(fk_hand_jnt, translation=positions[3], worldSpace=True)
+            fk_hand_jnt = cmds.joint(name=fk_joint_names[4])
+            cmds.xform(fk_hand_jnt, translation=positions[4], worldSpace=True)
 
             # Store in dictionary
+            self.joints["fk_clavicle"] = fk_clavicle_jnt
             self.joints["fk_shoulder"] = fk_shoulder_jnt
             self.joints["fk_elbow"] = fk_elbow_jnt
             self.joints["fk_wrist"] = fk_wrist_jnt
             self.joints["fk_hand"] = fk_hand_jnt
 
             # Orient joints
-            cmds.select(fk_shoulder_jnt)
+            cmds.select(fk_clavicle_jnt)
             cmds.joint(edit=True, orientJoint="xyz", secondaryAxisOrient="yup", children=True, zeroScaleOrient=True)
 
             # Verify final positions
-            for joint_name in ["fk_shoulder", "fk_elbow", "fk_wrist", "fk_hand"]:
+            for joint_name in ["fk_clavicle", "fk_shoulder", "fk_elbow", "fk_wrist", "fk_hand"]:
                 if joint_name in self.joints:
                     pos = cmds.xform(self.joints[joint_name], query=True, translation=True, worldSpace=True)
                     print(f"  {joint_name}: {pos}")
@@ -706,6 +726,7 @@ class LimbModule(BaseModule):
 
         # IK joint names
         ik_joint_names = [
+            f"{self.module_id}_clavicle_ik_jnt",  # Added clavicle
             f"{self.module_id}_shoulder_ik_jnt",
             f"{self.module_id}_elbow_ik_jnt",
             f"{self.module_id}_wrist_ik_jnt",
@@ -714,38 +735,44 @@ class LimbModule(BaseModule):
 
         # Create IK joints directly
         try:
-            # First joint at shoulder
+            # First joint at clavicle
             cmds.select(self.joint_grp)
-            ik_shoulder_jnt = cmds.joint(name=ik_joint_names[0])
-            cmds.xform(ik_shoulder_jnt, translation=positions[0], worldSpace=True)
+            ik_clavicle_jnt = cmds.joint(name=ik_joint_names[0])
+            cmds.xform(ik_clavicle_jnt, translation=positions[0], worldSpace=True)
 
-            # Second joint at elbow
+            # Second joint at shoulder
+            cmds.select(ik_clavicle_jnt)
+            ik_shoulder_jnt = cmds.joint(name=ik_joint_names[1])
+            cmds.xform(ik_shoulder_jnt, translation=positions[1], worldSpace=True)
+
+            # Third joint at elbow
             cmds.select(ik_shoulder_jnt)
-            ik_elbow_jnt = cmds.joint(name=ik_joint_names[1])
-            cmds.xform(ik_elbow_jnt, translation=positions[1], worldSpace=True)
+            ik_elbow_jnt = cmds.joint(name=ik_joint_names[2])
+            cmds.xform(ik_elbow_jnt, translation=positions[2], worldSpace=True)
 
-            # Third joint at wrist
+            # Fourth joint at wrist
             cmds.select(ik_elbow_jnt)
-            ik_wrist_jnt = cmds.joint(name=ik_joint_names[2])
-            cmds.xform(ik_wrist_jnt, translation=positions[2], worldSpace=True)
+            ik_wrist_jnt = cmds.joint(name=ik_joint_names[3])
+            cmds.xform(ik_wrist_jnt, translation=positions[3], worldSpace=True)
 
-            # Fourth joint at hand
+            # Fifth joint at hand
             cmds.select(ik_wrist_jnt)
-            ik_hand_jnt = cmds.joint(name=ik_joint_names[3])
-            cmds.xform(ik_hand_jnt, translation=positions[3], worldSpace=True)
+            ik_hand_jnt = cmds.joint(name=ik_joint_names[4])
+            cmds.xform(ik_hand_jnt, translation=positions[4], worldSpace=True)
 
             # Store in dictionary
+            self.joints["ik_clavicle"] = ik_clavicle_jnt
             self.joints["ik_shoulder"] = ik_shoulder_jnt
             self.joints["ik_elbow"] = ik_elbow_jnt
             self.joints["ik_wrist"] = ik_wrist_jnt
             self.joints["ik_hand"] = ik_hand_jnt
 
             # Orient joints
-            cmds.select(ik_shoulder_jnt)
+            cmds.select(ik_clavicle_jnt)
             cmds.joint(edit=True, orientJoint="xyz", secondaryAxisOrient="yup", children=True, zeroScaleOrient=True)
 
             # Verify final positions
-            for joint_name in ["ik_shoulder", "ik_elbow", "ik_wrist", "ik_hand"]:
+            for joint_name in ["ik_clavicle", "ik_shoulder", "ik_elbow", "ik_wrist", "ik_hand"]:
                 if joint_name in self.joints:
                     pos = cmds.xform(self.joints[joint_name], query=True, translation=True, worldSpace=True)
                     print(f"  {joint_name}: {pos}")
@@ -757,12 +784,9 @@ class LimbModule(BaseModule):
 
         print(f"Created joint chains for {self.module_id}")
 
-        # Apply any custom orientations for joints here
-        # This can be done after verifying all joints exist and are positioned correctly
-
         # Verify final joint positions across all chains
         print("\n=== FINAL JOINT POSITIONS ===")
-        for joint_type in ["shoulder", "elbow", "wrist", "hand"]:
+        for joint_type in ["clavicle", "shoulder", "elbow", "wrist", "hand"]:
             print(f"\n{joint_type.upper()} JOINT POSITIONS:")
             for prefix in ["", "fk_", "ik_"]:
                 key = f"{prefix}{joint_type}"
@@ -2344,3 +2368,96 @@ class LimbModule(BaseModule):
 
         print("Leg pole vector setup complete")
         return pole_ctrl
+
+    def _create_clavicle_setup(self):
+        """
+        Creates a clavicle joint and control that works with both FK and IK chains.
+        This adds the clavicle without changing the existing chain structure.
+        """
+        if self.limb_type != "arm":
+            return  # Only for arms
+
+        # Check if clavicle guide exists
+        if "clavicle" not in self.guides:
+            print(f"No clavicle guide found for {self.module_id}, skipping clavicle setup")
+            return
+
+        # Get clavicle position
+        clavicle_pos = cmds.xform(self.guides["clavicle"], query=True, translation=True, worldSpace=True)
+
+        # Get shoulder position for orientation
+        shoulder_pos = cmds.xform(self.guides["shoulder"], query=True, translation=True, worldSpace=True)
+
+        # Create clavicle joint
+        cmds.select(clear=True)
+        cmds.select(self.joint_grp)
+        clavicle_joint = cmds.joint(name=f"{self.module_id}_clavicle_jnt", position=clavicle_pos)
+        self.joints["clavicle"] = clavicle_joint
+
+        # Store current parents of main chains' shoulder joints
+        parents = {}
+        for prefix in ["", "fk_", "ik_"]:
+            key = f"{prefix}shoulder"
+            if key in self.joints and cmds.objExists(self.joints[key]):
+                parents[key] = cmds.listRelatives(self.joints[key], parent=True) or []
+
+        # Create clavicle control
+        clavicle_ctrl, clavicle_grp = create_control(
+            f"{self.module_id}_clavicle_ctrl",
+            "circle",
+            7.0,  # Size
+            CONTROL_COLORS["fk"],  # Use FK color
+            normal=[0, 1, 0]  # Initial orientation
+        )
+
+        # Position and orient the control
+        cmds.xform(clavicle_grp, translation=clavicle_pos, worldSpace=True)
+
+        # Aim constraint temporarily to orient toward shoulder
+        temp_loc = cmds.spaceLocator(name="temp_aim_loc")[0]
+        cmds.xform(temp_loc, translation=shoulder_pos, worldSpace=True)
+
+        temp_constraint = cmds.aimConstraint(
+            temp_loc,
+            clavicle_grp,
+            aimVector=[1, 0, 0],  # Aim X axis toward shoulder
+            upVector=[0, 1, 0],  # Keep Y up
+            worldUpType="vector",
+            worldUpVector=[0, 1, 0]
+        )[0]
+
+        cmds.delete(temp_constraint, temp_loc)
+
+        # Parent the control under the control group
+        cmds.parent(clavicle_grp, self.control_grp)
+        self.controls["clavicle"] = clavicle_ctrl
+
+        # Connect clavicle control to joint
+        cmds.parentConstraint(clavicle_ctrl, clavicle_joint, maintainOffset=True)
+
+        # Now re-parent each shoulder to clavicle
+        for prefix in ["", "fk_", "ik_"]:
+            key = f"{prefix}shoulder"
+            if key in self.joints and cmds.objExists(self.joints[key]):
+                # Unparent from current parent
+                if parents[key]:
+                    cmds.parent(self.joints[key], world=True)
+
+                # Parent to clavicle
+                cmds.parent(self.joints[key], clavicle_joint)
+                print(f"Reparented {key} to clavicle")
+
+        # Ensure the clavicle control is always visible in both FK/IK modes
+        # Find FK/IK switch if it exists
+        switch_ctrl = self.controls.get("fkik_switch")
+        if switch_ctrl and cmds.attributeQuery("FkIkBlend", node=switch_ctrl, exists=True):
+            # Remove any connections to visibility attribute
+            connections = cmds.listConnections(f"{clavicle_ctrl}.visibility", source=True, destination=False,
+                                               plugs=True) or []
+            for connection in connections:
+                cmds.disconnectAttr(connection, f"{clavicle_ctrl}.visibility")
+
+            # Set visibility on
+            cmds.setAttr(f"{clavicle_ctrl}.visibility", 1)
+
+        print(f"Created clavicle setup for {self.module_id}")

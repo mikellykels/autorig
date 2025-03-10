@@ -120,6 +120,10 @@ class ModularRigUI(QtWidgets.QDialog):
         self.build_rig_button.setEnabled(False)
         self.build_rig_button.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold;")
 
+        self.add_root_button = QtWidgets.QPushButton("Add Root Joint")
+        self.add_root_button.setEnabled(False)
+        self.add_root_button.setStyleSheet("background-color: #FFA500; color: white; font-weight: bold;")
+
     def create_layouts(self):
         """Create the UI layouts."""
         main_layout = QtWidgets.QVBoxLayout(self)
@@ -171,6 +175,8 @@ class ModularRigUI(QtWidgets.QDialog):
         build_layout.addLayout(guide_layout)
         build_layout.addWidget(self.build_rig_button)
 
+        build_layout.addWidget(self.add_root_button)
+
         build_group.setLayout(build_layout)
 
         # Add all groups to main layout
@@ -195,6 +201,8 @@ class ModularRigUI(QtWidgets.QDialog):
         self.update_module_name()
         self.module_type_combo.currentIndexChanged.connect(self.update_module_name)
         self.module_side_combo.currentIndexChanged.connect(self.update_module_name)
+
+        self.add_root_button.clicked.connect(self.add_root_joint)
 
     def update_settings_stack(self, index):
         """Update the settings stack widget based on the selected module type."""
@@ -237,6 +245,7 @@ class ModularRigUI(QtWidgets.QDialog):
         self.load_guides_button.setEnabled(True)
         self.build_rig_button.setEnabled(True)
         self.mirror_modules_button.setEnabled(True)
+        self.add_root_button.setEnabled(True)
 
         QtWidgets.QMessageBox.information(self, "Success", f"Initialized rig for character: {character_name}")
 
@@ -402,6 +411,85 @@ class ModularRigUI(QtWidgets.QDialog):
             module_type = module.module_type.capitalize()
             list_item = QtWidgets.QListWidgetItem(f"{module.side}_{module.module_name} ({module_type})")
             self.module_list.addItem(list_item)
+
+    def add_root_joint(self):
+        """Add a root joint and reparent the hierarchy."""
+        if not self.manager:
+            QtWidgets.QMessageBox.warning(self, "Warning", "Please initialize the rig first.")
+            return
+
+        # Confirm with user
+        result = QtWidgets.QMessageBox.question(
+            self, "Add Root Joint",
+            "This will create a root joint and modify the hierarchy. Continue?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No
+        )
+
+        if result == QtWidgets.QMessageBox.Yes:
+            # Check if we already have a root joint
+            root_joint_name = f"{self.manager.character_name}_root_jnt"
+            if cmds.objExists(root_joint_name):
+                cmds.delete(root_joint_name)
+
+            # Create the root joint at origin
+            cmds.select(clear=True)
+            root_joint = cmds.joint(name=root_joint_name, position=(0, 0, 0))
+
+            # Find the COG joint
+            cog_joint = None
+            for module in self.manager.modules.values():
+                if isinstance(module, SpineModule) and "cog" in module.joints:
+                    cog_joint = module.joints["cog"]
+                    break
+
+            if not cog_joint or not cmds.objExists(cog_joint):
+                QtWidgets.QMessageBox.warning(self, "Warning", "COG joint not found. Cannot complete hierarchy setup.")
+                return
+
+            # Reparent COG joint to root
+            cmds.parent(cog_joint, root_joint)
+
+            # Find the pelvis joint in the spine module
+            pelvis_joint = None
+            spine_module = None
+            for module in self.manager.modules.values():
+                if isinstance(module, SpineModule):
+                    spine_module = module
+                    if "pelvis" in module.joints:
+                        pelvis_joint = module.joints["pelvis"]
+                    break
+
+            if not pelvis_joint or not cmds.objExists(pelvis_joint):
+                QtWidgets.QMessageBox.warning(self, "Warning", "Pelvis joint not found. Cannot connect hip joints.")
+            else:
+                # Find all leg modules
+                leg_modules = [m for m in self.manager.modules.values() if
+                               isinstance(m, LimbModule) and m.limb_type == "leg"]
+
+                # Reparent hip joints to pelvis
+                for leg_module in leg_modules:
+                    if "hip" in leg_module.joints and cmds.objExists(leg_module.joints["hip"]):
+                        hip_joint = leg_module.joints["hip"]
+                        cmds.parent(hip_joint, pelvis_joint)
+                        print(f"Reparented {hip_joint} to {pelvis_joint}")
+
+            # Find all arm modules for clavicle connection
+            if spine_module and "chest" in spine_module.joints:
+                chest_joint = spine_module.joints["chest"]
+                arm_modules = [m for m in self.manager.modules.values() if
+                               isinstance(m, LimbModule) and m.limb_type == "arm"]
+
+                # Reparent clavicle joints to chest
+                for arm_module in arm_modules:
+                    if "clavicle" in arm_module.joints and cmds.objExists(arm_module.joints["clavicle"]):
+                        clavicle_joint = arm_module.joints["clavicle"]
+                        cmds.parent(clavicle_joint, chest_joint)
+                        print(f"Reparented {clavicle_joint} to {chest_joint}")
+
+            # Collect and organize clusters
+            self.manager.organize_clusters()
+
+            QtWidgets.QMessageBox.information(self, "Success", "Root joint created and hierarchy modified.")
 
 def show_ui():
     """Show the UI, ensuring only one instance exists."""
