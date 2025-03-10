@@ -112,6 +112,29 @@ class LimbModule(BaseModule):
         # Create visual connections between main guides and their up vectors
         self._create_guide_connections()
 
+    def _create_leg_guides(self):
+        """Create guides for a leg rig with orientation helpers."""
+        # Create main position guides
+        for guide_name, pos in self.default_positions.items():
+            # Skip creating the pole vector guide - we'll calculate it automatically
+            if guide_name == "pole":
+                continue
+
+            if guide_name in ["upv_hip", "upv_knee"]:
+                # Create as blade guides (different color)
+                self.blade_guides[guide_name] = create_guide(
+                    f"{self.module_id}_{guide_name}",
+                    pos,
+                    self.guide_grp,
+                    color=[0, 0.8, 0.8]  # Cyan for up vector guides
+                )
+            else:
+                # Create regular guides
+                self.guides[guide_name] = create_guide(f"{self.module_id}_{guide_name}", pos, self.guide_grp)
+
+        # Create visual connections between main guides and their up vectors
+        self._create_guide_connections()
+
     def _create_guide_connections(self):
         """Create visual curve connections between guides and their up vectors."""
         # Define connections to create
@@ -315,9 +338,15 @@ class LimbModule(BaseModule):
         # 2. Create main joint chain first
         main_joints = self._create_main_joint_chain()
 
+        # Get joint names based on limb type
+        if self.limb_type == "arm":
+            joint_names = ["shoulder", "elbow", "wrist", "hand"]
+        else:  # leg
+            joint_names = ["hip", "knee", "ankle", "foot", "toe"]
+
         # Store main joint orientations for use with IK chain
         joint_orientations = {}
-        for i, name in enumerate(["shoulder", "elbow", "wrist", "hand"]):
+        for i, name in enumerate(joint_names):
             if name in self.joints and cmds.objExists(self.joints[name]):
                 joint_orientations[name] = cmds.getAttr(f"{self.joints[name]}.jointOrient")[0]
 
@@ -326,32 +355,30 @@ class LimbModule(BaseModule):
             print(f"  {name}: {orient}")
 
         # 3. Duplicate main chain to create FK chain
-        if main_joints and len(main_joints) >= 4:
+        if main_joints and len(main_joints) >= (4 if self.limb_type == "arm" else 5):
             print("\nDuplicating main chain to create FK chain")
-            fk_joints = cmds.duplicate(main_joints[0], renameChildren=True, name=f"{self.module_id}_shoulder_fk_jnt")
+            first_joint_name = "shoulder" if self.limb_type == "arm" else "hip"
+            fk_joints = cmds.duplicate(main_joints[0], renameChildren=True,
+                                       name=f"{self.module_id}_{first_joint_name}_fk_jnt")
 
-            # Rename FK joints
-            if fk_joints:
-                # Rename all FK joints properly
-                joint_names = ["shoulder", "elbow", "wrist", "hand"]
-                for i, jnt in enumerate(joint_names):
-                    if i < len(fk_joints):
-                        old_name = fk_joints[i]
-                        new_name = f"{self.module_id}_{jnt}_fk_jnt"
-                        if old_name != new_name:
-                            try:
-                                cmds.rename(old_name, new_name)
-                                print(f"Renamed FK joint: {old_name} -> {new_name}")
-                            except:
-                                print(f"Failed to rename {old_name} to {new_name}")
+            # Rename FK joints properly
+            for i, jnt in enumerate(joint_names):
+                if i < len(fk_joints):
+                    old_name = fk_joints[i]
+                    new_name = f"{self.module_id}_{jnt}_fk_jnt"
+                    if old_name != new_name:
+                        try:
+                            cmds.rename(old_name, new_name)
+                            print(f"Renamed FK joint: {old_name} -> {new_name}")
+                        except:
+                            print(f"Failed to rename {old_name} to {new_name}")
 
-                        # Store in dictionary
-                        self.joints[f"fk_{jnt}"] = new_name
+                    # Store in dictionary
+                    self.joints[f"fk_{jnt}"] = new_name
 
         # 4. Create IK chain manually to match main chain EXACTLY
         print("\nCreating IK chain with matching orientations")
         prev_joint = None
-        joint_names = ["shoulder", "elbow", "wrist", "hand"]
 
         for i, name in enumerate(joint_names):
             if name in self.joints and cmds.objExists(self.joints[name]):
@@ -414,7 +441,12 @@ class LimbModule(BaseModule):
         print("\nCreating main joint chain")
 
         joint_positions = []
-        joint_names = ["shoulder", "elbow", "wrist", "hand"]
+
+        # Use appropriate joint names based on limb type
+        if self.limb_type == "arm":
+            joint_names = ["shoulder", "elbow", "wrist", "hand"]
+        else:  # leg
+            joint_names = ["hip", "knee", "ankle", "foot", "toe"]
 
         # Get positions from guides
         for name in joint_names:
@@ -422,6 +454,8 @@ class LimbModule(BaseModule):
                 pos = cmds.xform(self.guides[name], q=True, t=True, ws=True)
                 joint_positions.append(pos)
                 print(f"  {name} position: {pos}")
+            else:
+                print(f"  Warning: Guide '{name}' not found")
 
         # Create the joints
         created_joints = []
@@ -440,11 +474,20 @@ class LimbModule(BaseModule):
 
             created_joints.append(joint)
             self.joints[name] = joint
+            print(f"  Created joint: {joint} at {pos}")
 
-        # Orient joints - use xyz/yup for consistent orientation
+        # Orient joints with appropriate settings based on limb type
         if created_joints:
             cmds.select(created_joints[0])
-            cmds.joint(e=True, oj="xyz", secondaryAxisOrient="yup", ch=True, zso=True)
+
+            if self.limb_type == "arm":
+                # For arm, use xyz/yup orientation
+                print(f"  Applying xyz/yup orientation for arm chain")
+                cmds.joint(e=True, oj="xyz", secondaryAxisOrient="yup", ch=True, zso=True)
+            else:  # leg
+                # For leg, use xyz/zup orientation which gives better hip orientation
+                print(f"  Applying xyz/zup orientation for leg chain")
+                cmds.joint(e=True, oj="xyz", secondaryAxisOrient="zup", ch=True, zso=True)
 
         return created_joints
 
@@ -1126,35 +1169,62 @@ class LimbModule(BaseModule):
             cmds.joint(self.joints[joint_names[0]], e=True, oj="xyz", secondaryAxisOrient="yup", ch=True, zso=True)
 
     def _create_ik_chain(self):
-        """Create IK chain using Maya's built-in IK handle following the exact manual workflow."""
-        print(f"\n=== CREATING IK CHAIN FOR {self.module_id} ===")
+        """Create IK chain using Maya's built-in IK handle."""
+        if self.limb_type == "arm":
+            print(f"\n=== CREATING IK CHAIN FOR {self.module_id} ===")
 
-        # Skip if required joints don't exist
-        if not all(f"ik_{jnt}" in self.joints for jnt in ["shoulder", "wrist"]):
-            print("Missing required IK joints, cannot create IK chain")
-            return
+            # Skip if required joints don't exist
+            if not all(f"ik_{jnt}" in self.joints for jnt in ["shoulder", "wrist"]):
+                print("Missing required IK joints, cannot create IK chain")
+                return
 
-        # 1. Create IK handle with explicit start and end joints
-        print(f"Creating IK handle from {self.joints['ik_shoulder']} to {self.joints['ik_wrist']}")
+            # Create IK handle from shoulder to wrist
+            print(f"Creating IK handle from {self.joints['ik_shoulder']} to {self.joints['ik_wrist']}")
+            ik_handle_name = f"{self.module_id}_arm_ikh"
+            ik_handle, ik_effector = cmds.ikHandle(
+                name=ik_handle_name,
+                startJoint=self.joints["ik_shoulder"],
+                endEffector=self.joints["ik_wrist"],
+                solver="ikRPsolver"
+            )
 
-        # Create ikHandle with explicit arguments
-        ik_handle_name = f"{self.module_id}_arm_ikh"
-        ik_handle, ik_effector = cmds.ikHandle(
-            name=ik_handle_name,
-            startJoint=self.joints["ik_shoulder"],
-            endEffector=self.joints["ik_wrist"],
-            solver="ikRPsolver"
-        )
+            self.controls["ik_handle"] = ik_handle
+            print(f"Created IK handle: {ik_handle}")
 
-        self.controls["ik_handle"] = ik_handle
-        print(f"Created IK handle: {ik_handle}")
+            # Calculate pole vector position
+            self.pole_vector_pos = self._calculate_pole_vector_position()
 
-        # We'll parent it to the wrist control later in _create_arm_ik_controls
+            return ik_handle
 
-        # Calculate pole vector position
-        self.pole_vector_pos = None  # Will be positioned directly relative to the elbow later
+        elif self.limb_type == "leg":
+            print(f"\n=== CREATING IK CHAIN FOR {self.module_id} ===")
 
-        return ik_handle
+            # Skip if required joints don't exist
+            if not all(f"ik_{jnt}" in self.joints for jnt in ["hip", "ankle"]):
+                print("Missing required IK joints, cannot create IK chain")
+                return
+
+            # Create IK handle from hip to ankle
+            print(f"Creating IK handle from {self.joints['ik_hip']} to {self.joints['ik_ankle']}")
+            ik_handle_name = f"{self.module_id}_leg_ikh"
+            ik_handle, ik_effector = cmds.ikHandle(
+                name=ik_handle_name,
+                startJoint=self.joints["ik_hip"],
+                endEffector=self.joints["ik_ankle"],
+                solver="ikRPsolver"
+            )
+
+            self.controls["ik_handle"] = ik_handle
+            print(f"Created IK handle: {ik_handle}")
+
+            # Calculate pole vector position
+            self.pole_vector_pos = self._calculate_pole_vector_position()
+            print(f"Calculated pole vector position: {self.pole_vector_pos}")
+
+            # Create foot roll system
+            self._create_foot_roll_system()
+
+            return ik_handle
 
     def _create_foot_roll_system(self):
         """Create the foot roll system for legs."""
@@ -1518,31 +1588,8 @@ class LimbModule(BaseModule):
             if not cmds.attributeQuery(attr_name, node=ankle_ik_ctrl, exists=True):
                 cmds.addAttr(ankle_ik_ctrl, longName=attr_name, attributeType="float", defaultValue=0, keyable=True)
 
-        # Pole vector control - use sphere instead of square
-        pole_ctrl, pole_grp = create_control(
-            f"{self.module_id}_pole_ctrl",
-            "sphere",  # Changed to sphere
-            2.5,  # Larger size
-            CONTROL_COLORS["ik"]
-        )
-
-        # Position the control at validated pole position
-        cmds.xform(pole_grp, translation=self.pole_vector_pos, worldSpace=True)
-        cmds.parent(pole_grp, self.control_grp)
-        self.controls["pole"] = pole_ctrl
-
-        # Connect IK controls to IK handle
-        if "ik_handle" in self.controls:
-            ik_handle = self.controls["ik_handle"]
-
-            # Clear any existing constraints
-            constraints = cmds.listConnections(ik_handle, source=True, destination=True, type="constraint") or []
-            for constraint in constraints:
-                if cmds.objExists(constraint):
-                    cmds.delete(constraint)
-
-            # Connect pole vector constraint
-            cmds.poleVectorConstraint(self.controls["pole"], ik_handle)
+        # Create pole vector using the specialized method for legs
+        self._create_leg_pole_vector()
 
         # Set up foot roll - using the pivot groups created in _create_ik_chain
         self._setup_foot_roll_connections()
@@ -2253,3 +2300,47 @@ class LimbModule(BaseModule):
         print(f"Using Z axis: {z_axis}")
 
         return pole_pos
+
+    def _create_leg_pole_vector(self):
+        """
+        Create and properly position the pole vector control for the leg.
+        Following a similar workflow to the manual MEL approach.
+        """
+        print(f"\nCreating pole vector control for {self.module_id} leg")
+
+        # 1. Create pole vector control
+        pole_ctrl, pole_grp = create_control(
+            f"{self.module_id}_pole_ctrl",
+            "sphere",  # Use sphere for pole vector
+            2.5,  # Size
+            CONTROL_COLORS["ik"]
+        )
+
+        # 2. Position pole control at knee initially using a temporary constraint
+        if "ik_knee" in self.joints and cmds.objExists(self.joints["ik_knee"]):
+            print(f"Positioning pole control at knee initially")
+            temp_constraint = cmds.parentConstraint(self.joints["ik_knee"], pole_grp, maintainOffset=False)[0]
+            cmds.delete(temp_constraint)
+
+        # 3. Parent pole control to control group
+        cmds.parent(pole_grp, self.control_grp)
+        self.controls["pole"] = pole_ctrl
+
+        # 4. Create pole vector constraint to IK handle
+        if "ik_handle" in self.controls and cmds.objExists(self.controls["ik_handle"]):
+            print(f"Creating pole vector constraint from {pole_ctrl} to {self.controls['ik_handle']}")
+            cmds.poleVectorConstraint(pole_ctrl, self.controls["ik_handle"], weight=1)
+
+        # 5. Move pole control up in Y (DIFFERENT FROM ARM, which goes back in Z)
+        print(f"Moving pole control up in Y direction")
+        cmds.setAttr(f"{pole_ctrl}.translateY", 50)
+
+        # 6. Zero out the ikHandle's poleVector attributes
+        if "ik_handle" in self.controls and cmds.objExists(self.controls["ik_handle"]):
+            print(f"Zeroing out poleVector attributes on {self.controls['ik_handle']}")
+            cmds.setAttr(f"{self.controls['ik_handle']}.poleVectorX", 0)
+            cmds.setAttr(f"{self.controls['ik_handle']}.poleVectorY", 0)
+            cmds.setAttr(f"{self.controls['ik_handle']}.poleVectorZ", 0)
+
+        print("Leg pole vector setup complete")
+        return pole_ctrl
