@@ -413,7 +413,7 @@ class ModularRigUI(QtWidgets.QDialog):
             self.module_list.addItem(list_item)
 
     def add_root_joint(self):
-        """Add a root joint and create proper joint hierarchy while organizing the rig."""
+        """Add a root joint and create proper joint hierarchy."""
         if not self.manager:
             QtWidgets.QMessageBox.warning(self, "Warning", "Please initialize the rig first.")
             return
@@ -426,13 +426,6 @@ class ModularRigUI(QtWidgets.QDialog):
         )
 
         if result == QtWidgets.QMessageBox.Yes:
-            # Create rig_systems group if it doesn't exist
-            rig_systems_grp = f"{self.manager.character_name}_rig_systems"
-            if not cmds.objExists(rig_systems_grp):
-                rig_systems_grp = cmds.group(empty=True, name=rig_systems_grp)
-                cmds.parent(rig_systems_grp, self.manager.rig_grp)
-                print(f"Created rig systems group: {rig_systems_grp}")
-
             # Important: Reference to the joints group
             joints_grp = self.manager.joints_grp
 
@@ -458,80 +451,12 @@ class ModularRigUI(QtWidgets.QDialog):
                 QtWidgets.QMessageBox.warning(self, "Warning", "COG joint not found. Cannot complete hierarchy setup.")
                 return
 
-            # STEP 1: COLLECT AND STORE POSITIONS OF IMPORTANT NODES
-            print("\n--- STEP 1: Storing positions before reorganization ---")
-            ik_data = {}
-
-            for module in self.manager.modules.values():
-                if not isinstance(module, LimbModule):
-                    continue
-
-                if "ik_handle" not in module.controls or not cmds.objExists(module.controls["ik_handle"]):
-                    continue
-
-                # Get key components
-                ik_handle = module.controls["ik_handle"]
-                pole_ctrl = module.controls.get("pole") if "pole" in module.controls else None
-
-                # Store IK handle data
-                module_data = {
-                    "ik_handle": ik_handle,
-                    "pole_ctrl": pole_ctrl,
-                    "pole_ctrl_pos": cmds.xform(pole_ctrl, q=True, t=True, ws=True) if pole_ctrl else None
-                }
-
-                # Store current pole vector X,Y,Z values
-                for axis in ["X", "Y", "Z"]:
-                    attr = f"poleVector{axis}"
-                    if cmds.attributeQuery(attr, node=ik_handle, exists=True):
-                        try:
-                            value = cmds.getAttr(f"{ik_handle}.{attr}")
-                            module_data[f"poleVector{axis}"] = value
-                            print(f"Stored {ik_handle}.{attr} = {value}")
-                        except:
-                            pass
-
-                # For arm modules, also store clavicle and IK handle group
-                if module.limb_type == "arm":
-                    if "clavicle" in module.joints and cmds.objExists(module.joints["clavicle"]):
-                        module_data["clavicle"] = module.joints["clavicle"]
-
-                    # Try to find the arm IK handle group
-                    ik_handle_grp = f"{module.module_id}_arm_ikh_grp"
-                    if cmds.objExists(ik_handle_grp):
-                        module_data["ik_handle_grp"] = ik_handle_grp
-
-                # Store data for this module
-                ik_data[module.module_id] = module_data
-
-            # STEP 2: REORGANIZE JOINT HIERARCHY
-            print("\n--- STEP 2: Moving IK/FK systems to rig_systems group ---")
-            for module in self.manager.modules.values():
-                # Move IK and FK joint chains to the systems group
-                for prefix in ["ik_", "fk_"]:
-                    for joint_name in module.joints.keys():
-                        if joint_name.startswith(prefix):
-                            joint = module.joints[joint_name]
-                            if cmds.objExists(joint):
-                                try:
-                                    # Get current parent
-                                    current_parent = cmds.listRelatives(joint, parent=True) or []
-
-                                    # Only process root joints of each IK/FK chain
-                                    if current_parent and current_parent[0] != rig_systems_grp:
-                                        if "shoulder" in joint_name or "hip" in joint_name or "clavicle" in joint_name:
-                                            print(f"Moving {joint} to {rig_systems_grp}")
-                                            cmds.parent(joint, rig_systems_grp)
-                                except Exception as e:
-                                    print(f"Error reparenting {joint}: {str(e)}")
-
-            # STEP 3: SETUP MAIN BINDING SKELETON
-            print("\n--- STEP 3: Setting up main skeleton hierarchy ---")
-            # Reparent COG joint to root
+            # STEP 1: Reparent COG to root
+            print("\n--- STEP 1: Setting up main skeleton hierarchy ---")
             cmds.parent(cog_joint, root_joint)
             print(f"Parented {cog_joint} to {root_joint}")
 
-            # Find the pelvis joint in the spine module
+            # STEP 2: Find the pelvis joint in the spine module
             pelvis_joint = None
             spine_module = None
             for module in self.manager.modules.values():
@@ -541,7 +466,7 @@ class ModularRigUI(QtWidgets.QDialog):
                         pelvis_joint = module.joints["pelvis"]
                         break
 
-            # Connect hips to pelvis (binding joint chain only)
+            # STEP 3: Connect hips to pelvis (binding joint chain only)
             if pelvis_joint and cmds.objExists(pelvis_joint):
                 # Find all leg modules
                 leg_modules = [m for m in self.manager.modules.values() if
@@ -554,7 +479,7 @@ class ModularRigUI(QtWidgets.QDialog):
                         cmds.parent(hip_joint, pelvis_joint)
                         print(f"Reparented {hip_joint} to {pelvis_joint}")
 
-            # Connect arms to chest (binding joint chain only)
+            # STEP 4: Connect arms to chest (binding joint chain only)
             if spine_module and "chest" in spine_module.joints:
                 chest_joint = spine_module.joints["chest"]
                 arm_modules = [m for m in self.manager.modules.values() if
@@ -566,186 +491,6 @@ class ModularRigUI(QtWidgets.QDialog):
                         clavicle_joint = arm_module.joints["clavicle"]
                         cmds.parent(clavicle_joint, chest_joint)
                         print(f"Reparented {clavicle_joint} to {chest_joint}")
-
-            # STEP 4: CLEANUP EMPTY GROUPS
-            print("\n--- STEP 4: Cleaning up empty groups ---")
-            # Find and delete empty module groups in joints_grp
-            character_name = self.manager.character_name
-
-            # Get all direct children of joints_grp that aren't the root joint
-            try:
-                joint_groups = cmds.listRelatives(joints_grp, children=True, type="transform") or []
-                for grp in joint_groups:
-                    # Skip the root joint
-                    if grp == root_joint_name:
-                        continue
-
-                    # Skip if not a module group
-                    if not (grp.startswith('l_') or grp.startswith('r_') or grp.startswith('c_')):
-                        continue
-
-                    # Check if it has children
-                    children = cmds.listRelatives(grp, children=True) or []
-                    if not children:
-                        try:
-                            print(f"Deleting empty joint group: {grp}")
-                            cmds.delete(grp)
-                        except Exception as e:
-                            print(f"Error deleting {grp}: {str(e)}")
-            except Exception as e:
-                print(f"Error cleaning up joint groups: {str(e)}")
-
-            # STEP 5: CONNECT CLAVICLES TO IK SYSTEMS FOR ARMS
-            print("\n--- STEP 5: Connecting clavicles to IK systems ---")
-
-            for module_id, data in ik_data.items():
-                if "clavicle" in data and "ik_handle_grp" in data:
-                    clavicle = data["clavicle"]
-                    ik_handle_grp = data["ik_handle_grp"]
-
-                    print(f"Connecting arm IK handle group {ik_handle_grp} to clavicle {clavicle}")
-                    cmds.pointConstraint(clavicle, ik_handle_grp, maintainOffset=True)
-
-            # STEP 6: FIX POLE VECTORS USING STORED VALUES
-            print("\n--- STEP 6: Fixing pole vectors using stored values ---")
-
-            for module_id, data in ik_data.items():
-                ik_handle = data.get("ik_handle")
-                pole_ctrl = data.get("pole_ctrl")
-
-                if not ik_handle or not pole_ctrl or not cmds.objExists(ik_handle) or not cmds.objExists(pole_ctrl):
-                    continue
-
-                print(f"Fixing pole vector for {module_id}")
-
-                # First remove any existing constraints
-                constraints = cmds.listConnections(ik_handle, type="poleVectorConstraint") or []
-                for constraint in constraints:
-                    try:
-                        print(f"  Removing constraint: {constraint}")
-                        cmds.delete(constraint)
-                    except Exception as e:
-                        print(f"  Warning: Could not delete constraint {constraint}: {str(e)}")
-
-                # Manually set the initial poleVector values to prevent popping
-                for axis in ["X", "Y", "Z"]:
-                    if f"poleVector{axis}" in data:
-                        try:
-                            cmds.setAttr(f"{ik_handle}.poleVector{axis}", 0)
-                        except Exception as e:
-                            print(f"  Warning: Could not zero poleVector{axis}: {str(e)}")
-
-                # Create the pole vector constraint
-                try:
-                    print(f"  Creating pole vector constraint: {pole_ctrl} -> {ik_handle}")
-                    cmds.poleVectorConstraint(pole_ctrl, ik_handle)
-                except Exception as e:
-                    print(f"  Error creating pole vector constraint: {str(e)}")
-
-                # Important: Verify constraint is correct
-                # Check if we have any poleVector values not equal to zero
-                has_nonzero = False
-                for axis in ["X", "Y", "Z"]:
-                    try:
-                        value = cmds.getAttr(f"{ik_handle}.poleVector{axis}")
-                        print(f"  Final poleVector{axis} = {value}")
-                        if abs(value) > 0.0001:
-                            has_nonzero = True
-                    except:
-                        pass
-
-                # If we still have non-zero values, we need to try a different approach
-                if has_nonzero:
-                    print(f"  IMPORTANT: Still have non-zero pole vector values. Using manual zeroing approach.")
-
-                    # Remove constraint again
-                    constraints = cmds.listConnections(ik_handle, type="poleVectorConstraint") or []
-                    for constraint in constraints:
-                        try:
-                            cmds.delete(constraint)
-                        except:
-                            pass
-
-                    # Force pole vector values to zero regardless of connections
-                    for axis in ["X", "Y", "Z"]:
-                        try:
-                            # Break any connections first
-                            connections = cmds.listConnections(f"{ik_handle}.poleVector{axis}", source=True,
-                                                               plugs=True) or []
-                            for conn in connections:
-                                try:
-                                    cmds.disconnectAttr(conn, f"{ik_handle}.poleVector{axis}")
-                                except:
-                                    pass
-
-                            # Set to 0
-                            cmds.setAttr(f"{ik_handle}.poleVector{axis}", 0)
-                            print(f"  Forced poleVector{axis} to 0")
-                        except:
-                            pass
-
-                    # Now move the pole control to be directly in-line with the three main joints
-                    # to avoid stretching or collapsing
-                    if module_id.endswith("arm"):
-                        # Get positions of shoulder, elbow, wrist
-                        shoulder = module.joints.get("ik_shoulder")
-                        elbow = module.joints.get("ik_elbow")
-                        wrist = module.joints.get("ik_wrist")
-
-                        if shoulder and elbow and wrist and cmds.objExists(shoulder) and cmds.objExists(
-                                elbow) and cmds.objExists(wrist):
-                            shoulder_pos = cmds.xform(shoulder, q=True, t=True, ws=True)
-                            elbow_pos = cmds.xform(elbow, q=True, t=True, ws=True)
-                            wrist_pos = cmds.xform(wrist, q=True, t=True, ws=True)
-
-                            # Calculate the vector from elbow to pole
-                            # We'll keep the same distance but adjust direction to be perpendicular to arm
-                            orig_pole_pos = cmds.xform(pole_ctrl, q=True, t=True, ws=True)
-
-                            # Move pole position back on Z (perpendicular to arm plane) by 50 units
-                            cmds.setAttr(f"{pole_ctrl}.translateZ", -50)
-
-                            print(f"  Positioned pole control behind elbow")
-
-                    # Now create the pole vector constraint again
-                    try:
-                        cmds.poleVectorConstraint(pole_ctrl, ik_handle)
-                        print(f"  Created final pole vector constraint")
-                    except Exception as e:
-                        print(f"  Error creating final pole vector constraint: {str(e)}")
-
-            # STEP 7: ORGANIZE CLUSTERS
-            print("\n--- STEP 7: Organizing clusters ---")
-            try:
-                # Find all cluster handles
-                all_clusters = cmds.ls("*Handle", type="transform") or []
-
-                # Filter to only include actual cluster handles
-                rig_clusters = []
-                for cluster in all_clusters:
-                    # Verify it's a cluster handle
-                    if cmds.objExists(cluster) and cmds.listRelatives(cluster, shapes=True, type="clusterHandle"):
-                        rig_clusters.append(cluster)
-
-                if rig_clusters:
-                    # Create a new group directly under the rig group
-                    clustersgrp = cmds.group(empty=True, name=f"{character_name}_clusters_grp")
-                    cmds.parent(clustersgrp, self.manager.rig_grp)
-
-                    # Add all clusters using select and parent
-                    cmds.select(clear=True)
-
-                    for cluster in rig_clusters:
-                        try:
-                            cmds.parent(cluster, clustersgrp)
-                            print(f"  Parented cluster {cluster} to clusters group")
-                        except Exception as e:
-                            print(f"  Warning: Could not parent {cluster}: {str(e)}")
-
-                    cmds.setAttr(f"{clustersgrp}.visibility", 0)
-                    print(f"Organized {len(rig_clusters)} clusters")
-            except Exception as e:
-                print(f"Error organizing clusters: {str(e)}")
 
             QtWidgets.QMessageBox.information(self, "Success", "Root joint created and hierarchy organized.")
 
