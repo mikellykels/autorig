@@ -440,6 +440,15 @@ class ModularRigUI(QtWidgets.QDialog):
             root_joint = cmds.joint(name=root_joint_name, position=(0, 0, 0))
             print(f"Created {root_joint} under {joints_grp}")
 
+            # Create a rig systems group for IK/FK chains
+            systems_grp_name = f"{self.manager.character_name}_rig_systems"
+            if cmds.objExists(systems_grp_name):
+                cmds.delete(systems_grp_name)
+
+            systems_grp = cmds.group(empty=True, name=systems_grp_name)
+            cmds.parent(systems_grp, self.manager.rig_grp)
+            print(f"Created rig systems group: {systems_grp}")
+
             # Find the COG joint
             cog_joint = None
             for module in self.manager.modules.values():
@@ -479,6 +488,28 @@ class ModularRigUI(QtWidgets.QDialog):
                         cmds.parent(hip_joint, pelvis_joint)
                         print(f"Reparented {hip_joint} to {pelvis_joint}")
 
+                    # Move IK/FK chains to systems group while maintaining hierarchy
+                    # For legs, move the ik_hip and fk_hip (they bring their children with them)
+                    for prefix in ["ik_", "fk_"]:
+                        root_key = f"{prefix}hip"
+                        if root_key in leg_module.joints and cmds.objExists(leg_module.joints[root_key]):
+                            root_joint = leg_module.joints[root_key]
+                            try:
+                                # Create a subgroup for this chain
+                                chain_grp = cmds.group(empty=True, name=f"{leg_module.module_id}_{prefix}chain_grp")
+                                cmds.parent(chain_grp, systems_grp)
+
+                                # Unparent from current parent
+                                current_parent = cmds.listRelatives(root_joint, parent=True)
+                                if current_parent:
+                                    cmds.parent(root_joint, world=True)
+
+                                # Parent to the chain group
+                                cmds.parent(root_joint, chain_grp)
+                                print(f"Moved {root_joint} chain to systems group while maintaining hierarchy")
+                            except Exception as e:
+                                print(f"Error moving {root_joint}: {str(e)}")
+
             # STEP 4: Connect arms to chest (binding joint chain only)
             if spine_module and "chest" in spine_module.joints:
                 chest_joint = spine_module.joints["chest"]
@@ -491,6 +522,31 @@ class ModularRigUI(QtWidgets.QDialog):
                         clavicle_joint = arm_module.joints["clavicle"]
                         cmds.parent(clavicle_joint, chest_joint)
                         print(f"Reparented {clavicle_joint} to {chest_joint}")
+
+                    # Move IK/FK chains to systems group while maintaining hierarchy
+                    # For arms, move the ik_shoulder and fk_shoulder (they bring their children with them)
+                    for prefix in ["ik_", "fk_"]:
+                        root_key = f"{prefix}shoulder"
+                        if root_key in arm_module.joints and cmds.objExists(arm_module.joints[root_key]):
+                            root_joint = arm_module.joints[root_key]
+                            try:
+                                # Create a subgroup for this chain
+                                chain_grp = cmds.group(empty=True, name=f"{arm_module.module_id}_{prefix}chain_grp")
+                                cmds.parent(chain_grp, systems_grp)
+
+                                # Unparent from current parent
+                                current_parent = cmds.listRelatives(root_joint, parent=True)
+                                if current_parent:
+                                    cmds.parent(root_joint, world=True)
+
+                                # Parent to the chain group
+                                cmds.parent(root_joint, chain_grp)
+                                print(f"Moved {root_joint} chain to systems group while maintaining hierarchy")
+                            except Exception as e:
+                                print(f"Error moving {root_joint}: {str(e)}")
+
+            # STEP 5: Organize clusters
+            self.manager.organize_clusters()
 
             QtWidgets.QMessageBox.information(self, "Success", "Root joint created and hierarchy organized.")
 

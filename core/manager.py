@@ -10,6 +10,7 @@ Date: 2025
 
 import maya.cmds as cmds
 import json
+from autorig.core.utils import create_control
 
 
 class ModuleManager:
@@ -114,102 +115,6 @@ class ModuleManager:
         for module_id, positions in guide_data.items():
             if module_id in self.modules:
                 self.modules[module_id].set_guide_positions(positions)
-
-    def build_mirrored_module(self, left_module, right_module):
-        """
-        Build and connect all controls for a mirrored module.
-        This is much more reliable than trying to mirror controls.
-
-        Args:
-            left_module (BaseModule): Source module (left side)
-            right_module (BaseModule): Target module (right side)
-        """
-        print(f"\n=== BUILDING MIRRORED MODULE {right_module.module_id} FROM {left_module.module_id} ===")
-
-        # Verify modules are compatible
-        if left_module.module_type != right_module.module_type:
-            print(f"Module types don't match: {left_module.module_type} vs {right_module.module_type}")
-            return False
-
-        # Check if we already have joints before proceeding
-        if not right_module.joints:
-            print("No joints found in target module - mirroring joints first")
-            self._mirror_joints(left_module, right_module)
-            self._mirror_ik_handles(left_module, right_module)
-
-        # Store important references before clearing controls
-        ik_handle = right_module.controls.get("ik_handle", None)
-        foot_roll_grp = right_module.controls.get("foot_roll_grp", None)
-        heel_pivot = right_module.controls.get("heel_pivot", None)
-        toe_pivot = right_module.controls.get("toe_pivot", None)
-        ball_pivot = right_module.controls.get("ball_pivot", None)
-        ankle_pivot = right_module.controls.get("ankle_pivot", None)
-        ankle_foot_ik = right_module.controls.get("ankle_foot_ik", None)
-        foot_toe_ik = right_module.controls.get("foot_toe_ik", None)
-
-        # Clear existing controls excluding the IK handles and foot roll groups
-        if right_module.controls:
-            print("Clearing existing controls in target module (preserving IK handles and foot roll groups)")
-            preserved_nodes = ["ik_handle", "foot_roll_grp", "heel_pivot", "toe_pivot",
-                               "ball_pivot", "ankle_pivot", "ankle_foot_ik", "foot_toe_ik"]
-
-            for ctrl_name, ctrl in list(right_module.controls.items()):
-                if ctrl_name in preserved_nodes:
-                    # Skip preserved nodes
-                    continue
-
-                if cmds.objExists(ctrl):
-                    grp_name = f"{ctrl}_grp"
-                    if cmds.objExists(grp_name):
-                        print(f"Deleting control group: {grp_name}")
-                        cmds.delete(grp_name)
-                    else:
-                        print(f"Deleting control: {ctrl}")
-                        cmds.delete(ctrl)
-
-            # Clear and then restore preserved controls
-            controls_backup = {}
-            for node in preserved_nodes:
-                if node in right_module.controls:
-                    controls_backup[node] = right_module.controls[node]
-
-            right_module.controls = {}
-
-            # Restore preserved nodes
-            for node, value in controls_backup.items():
-                if cmds.objExists(value):  # Only restore if the node still exists
-                    right_module.controls[node] = value
-                    print(f"Preserved control: {node} = {value}")
-
-        # Now call the appropriate creation method based on module type
-        if right_module.module_type == "leg":
-            print("Building leg controls for mirrored module")
-            right_module._create_leg_controls()
-            right_module._create_fkik_switch()
-
-            # Set up IK constraints
-            self._setup_mirrored_ik_constraints_for_leg(right_module)
-
-            right_module._setup_ikfk_blending()
-            right_module._finalize_fkik_switch()
-
-            # Fix hip orientation
-            print("Fixing hip orientation for mirrored leg")
-            right_module._fix_hip_joint_orientation()
-
-        elif right_module.module_type == "arm":
-            print("Building arm controls for mirrored module")
-            right_module._create_arm_controls()
-            right_module._create_fkik_switch()
-
-            # Set up IK constraints
-            self._setup_mirrored_ik_constraints_for_arm(right_module)
-
-            right_module._setup_ikfk_blending()
-            right_module._finalize_fkik_switch()
-
-        print(f"=== MIRRORED MODULE BUILD COMPLETE: {right_module.module_id} ===\n")
-        return True
 
     def _setup_mirrored_ik_constraints_for_arm(self, module):
         """
@@ -341,7 +246,7 @@ class ModuleManager:
 
     def mirror_modules(self):
         """
-        Mirror left side modules to right side.
+        Mirror left side modules to right side using Maya's native mirrorJoint command.
         Only mirror limb modules (arms and legs), not spine.
 
         Returns:
@@ -384,28 +289,17 @@ class ModuleManager:
             mirrored_count += 1
             print(f"Processing mirrored module: {right_module.module_id}")
 
-            # 3. Mirror based on the stage of rig creation
-            # 3a. If guides exist for the left module, mirror them
-            if left_module.guides and not right_module.guides:
-                right_module.create_guides()
-                self._mirror_guides(left_module, right_module)
+            # 3. Mirror the joints using the _mirror_joints_only method
+            self._mirror_joints_only(left_module, right_module)
 
-            # 3b. Check if the left module is fully built (has controls)
-            left_built = len(left_module.controls) > 0
-
-            if left_built:
-                # Use the completely new approach for building mirrored controls
-                self.build_mirrored_module(left_module, right_module)
+            # 4. Mirror the controls
+            self._mirror_controls(left_module, right_module)
 
         return mirrored_count
 
     def _mirror_guides(self, source_module, target_module):
         """
         Mirror guides from source module to target module.
-
-        Args:
-            source_module (BaseModule): Source module (left side)
-            target_module (BaseModule): Target module (right side)
         """
         # 1. Make sure both modules have guide groups
         if not source_module.guide_grp or not target_module.guide_grp:
@@ -423,231 +317,145 @@ class ModuleManager:
                 pos = cmds.xform(guide, query=True, translation=True, worldSpace=True)
                 rot = cmds.xform(guide, query=True, rotation=True, worldSpace=True)
 
-                # 4. Mirror the position - negate X coordinate for YZ plane mirroring
-                mirror_pos = [-pos[0], pos[1], pos[2]]
+                # 4. Mirror the position based on the type of guide
+                if guide_name == "pole":
+                    if source_module.module_type == "arm":
+                        # For arms, explicitly set Z to -50 (behind the elbow)
+                        mirror_pos = [-pos[0], pos[1], -50.0]
+                        print(f"Setting arm pole vector Z to -50.0")
+                    else:  # leg
+                        # For legs, flip both X and Z
+                        mirror_pos = [-pos[0], pos[1], -pos[2]]
+                else:
+                    # Regular guide mirroring - only flip X
+                    mirror_pos = [-pos[0], pos[1], pos[2]]
 
-                # 5. Mirror the rotation - negate appropriate rotation values
-                # For YZ plane, negate Y and Z rotations
+                # For YZ plane mirroring, flip Y and Z rotations
                 mirror_rot = [rot[0], -rot[1], -rot[2]]
 
-                # 6. Apply mirrored values to target guide
+                # 5. Apply mirrored values to target guide
                 cmds.xform(target_guide, translation=mirror_pos, worldSpace=True)
                 cmds.xform(target_guide, rotation=mirror_rot, worldSpace=True)
 
                 print(f"Mirrored guide: {guide_name} from {source_module.module_id} to {target_module.module_id}")
+                print(f"  Source position: {pos}")
+                print(f"  Mirrored position: {mirror_pos}")
 
-    def _mirror_joints(self, source_module, target_module):
+        # 6. Mirror blade guides (up vector guides)
+        if hasattr(source_module, 'blade_guides') and hasattr(target_module, 'blade_guides'):
+            for guide_name, guide in source_module.blade_guides.items():
+                if guide_name in target_module.blade_guides and cmds.objExists(guide) and cmds.objExists(
+                        target_module.blade_guides[guide_name]):
+                    target_guide = target_module.blade_guides[guide_name]
+
+                    # Get position and rotation
+                    pos = cmds.xform(guide, query=True, translation=True, worldSpace=True)
+                    rot = cmds.xform(guide, query=True, rotation=True, worldSpace=True)
+
+                    # Mirror position and rotation
+                    mirror_pos = [-pos[0], pos[1], pos[2]]
+                    mirror_rot = [rot[0], -rot[1], -rot[2]]
+
+                    # Apply to target blade guide
+                    cmds.xform(target_guide, translation=mirror_pos, worldSpace=True)
+                    cmds.xform(target_guide, rotation=mirror_rot, worldSpace=True)
+
+                    print(
+                        f"Mirrored blade guide: {guide_name} from {source_module.module_id} to {target_module.module_id}")
+
+    def _mirror_joints_only(self, source_module, target_module):
         """
         Mirror joints from source module to target module using Maya's native mirror joint command.
+        Directly mirrors root joints with -mirrorBehavior flag.
 
         Args:
             source_module (BaseModule): Source module (left side)
             target_module (BaseModule): Target module (right side)
         """
-        # Make sure both modules have joints
+        # Make sure source module has joints
         if not source_module.joints:
             print("Error: Source joints not found")
             return
 
         print(f"\n=== MIRRORING JOINTS from {source_module.module_id} to {target_module.module_id} ===")
 
-        # Determine joint chains based on module type
+        # Clear target module's joints dictionary
+        target_module.joints.clear()
+
+        # Make sure the target module has its module groups created
+        if not hasattr(target_module, '_create_module_groups'):
+            print("Error: Target module doesn't have _create_module_groups method")
+            return
+
+        # Initialize module groups if needed
+        target_module._create_module_groups()
+
+        # 1. First mirror the main chain
+        # Determine the root joint
         if source_module.module_type == "arm":
-            main_chain = ["shoulder", "elbow", "wrist", "hand"]
-        elif source_module.module_type == "leg":
-            main_chain = ["hip", "knee", "ankle", "foot", "toe"]
-        else:
-            print("Not a limb module, skipping")
+            root_joint_key = "clavicle" if "clavicle" in source_module.joints else "shoulder"
+        else:  # leg
+            root_joint_key = "hip"
+
+        if root_joint_key not in source_module.joints:
+            print(f"Root joint {root_joint_key} not found, cannot mirror")
             return
 
-        # Get joint groups for each module
-        source_joint_grp = source_module.joint_grp
-        target_joint_grp = target_module.joint_grp
+        root_joint = source_module.joints[root_joint_key]
 
-        if not cmds.objExists(source_joint_grp) or not cmds.objExists(target_joint_grp):
-            print(f"Joint groups do not exist: {source_joint_grp} or {target_joint_grp}")
-            return
+        # Select and mirror using Maya's native command exactly as in your MEL example
+        print(f"Mirroring main chain from {root_joint}")
+        cmds.select(clear=True)
+        cmds.select(root_joint)
 
-        print(f"Source joint group: {source_joint_grp}")
-        print(f"Target joint group: {target_joint_grp}")
+        try:
+            mirrored_result = cmds.mirrorJoint(
+                mirrorYZ=True,
+                mirrorBehavior=True,
+                searchReplace=[f"{source_module.side}_", f"{target_module.side}_"]
+            )
+            print(f"Mirror result: {mirrored_result}")
 
-        # Process each chain type: main, IK, and FK
-        joint_prefixes = ["", "ik_", "fk_"]
+            # Update the target module's joints dictionary
+            # We need to map all the mirrored joints to their keys
+            if mirrored_result:
+                # Find all joints in the target module
+                target_prefix = f"{target_module.side}_{target_module.module_name}_"
+                target_joints = cmds.ls(f"{target_prefix}*_jnt", f"{target_prefix}*_fk_jnt", f"{target_prefix}*_ik_jnt")
 
-        for prefix in joint_prefixes:
-            print(f"\n--- Processing chain with prefix: '{prefix}' ---")
+                # Map them to the target module's joints dictionary
+                for joint in target_joints:
+                    # Extract the joint type from the name
+                    if "_fk_jnt" in joint:
+                        # FK joint (e.g., r_arm_shoulder_fk_jnt)
+                        base_name = joint.replace(f"{target_prefix}", "").replace("_fk_jnt", "")
+                        target_module.joints[f"fk_{base_name}"] = joint
+                        print(f"Mapped fk_{base_name} to {joint}")
+                    elif "_ik_jnt" in joint:
+                        # IK joint (e.g., r_arm_shoulder_ik_jnt)
+                        base_name = joint.replace(f"{target_prefix}", "").replace("_ik_jnt", "")
+                        target_module.joints[f"ik_{base_name}"] = joint
+                        print(f"Mapped ik_{base_name} to {joint}")
+                    elif "_jnt" in joint:
+                        # Main joint (e.g., r_arm_shoulder_jnt)
+                        base_name = joint.replace(f"{target_prefix}", "").replace("_jnt", "")
+                        target_module.joints[base_name] = joint
+                        print(f"Mapped {base_name} to {joint}")
 
-            # Get source root joint
-            root_joint_name = main_chain[0]
-            source_key = f"{prefix}{root_joint_name}"
-
-            if source_key not in source_module.joints or not cmds.objExists(source_module.joints[source_key]):
-                print(f"Source joint {source_key} not found, skipping chain")
-                continue
-
-            source_root_joint = source_module.joints[source_key]
-            print(f"Root joint: {source_root_joint}")
-
-            # Debug: Print all joints in this chain
-            for joint_name in main_chain:
-                joint_key = f"{prefix}{joint_name}"
-                if joint_key in source_module.joints:
-                    print(f"Chain includes {joint_key}: {source_module.joints[joint_key]}")
-
-            # Delete existing target joints of this type if they exist
-            for joint_name in main_chain:
-                target_key = f"{prefix}{joint_name}"
-                if target_key in target_module.joints and cmds.objExists(target_module.joints[target_key]):
-                    print(f"Deleting existing target joint: {target_module.joints[target_key]}")
-                    cmds.delete(target_module.joints[target_key])
-
-            # Use Maya's native mirror joint command
-            print(f"Mirroring joint chain using native Maya mirrorJoint command")
-            try:
-                # Make sure the joint is visible for selection
-                cmds.setAttr(f"{source_root_joint}.visibility", 1)
-
-                # Select the source root joint
-                cmds.select(source_root_joint, replace=True)
-                selected = cmds.ls(selection=True)
-                print(f"Selected for mirroring: {selected}")
-
-                # Mirror across YZ plane with proper behavior
-                mirrored_joints = cmds.mirrorJoint(
-                    mirrorYZ=True,  # Mirror across YZ plane (flip X)
-                    mirrorBehavior=True,  # Mirror orientation behavior
-                    searchReplace=[f"{source_module.side}_", f"{target_module.side}_"]  # Replace l_ with r_ etc.
-                )
-
-                print(f"Successfully mirrored joints: {mirrored_joints}")
-
-                # Update the target module's joint dictionary with the new joints
-                for i, joint_name in enumerate(main_chain):
-                    if i < len(mirrored_joints):
-                        target_key = f"{prefix}{joint_name}"
-                        # Store short name to avoid path issues
-                        mirrored_joint_name = mirrored_joints[i].split('|')[-1]
-                        target_module.joints[target_key] = mirrored_joint_name
-                        print(f"Updated target joint: {target_key} = {mirrored_joint_name}")
-
-                # Reparent the mirrored joints to the target joint group
-                if mirrored_joints:
-                    root_mirrored = mirrored_joints[0]
-                    print(f"Reparenting {root_mirrored} to {target_joint_grp}")
-                    cmds.parent(root_mirrored, target_joint_grp)
-
-            except Exception as e:
-                print(f"Error mirroring joints: {str(e)}")
-                import traceback
-                traceback.print_exc()
+            # Parent the root mirrored joint to the target module's joint group
+            if mirrored_result and target_module.joint_grp:
+                mirrored_root = mirrored_result[0]
+                current_parent = cmds.listRelatives(mirrored_root, parent=True)
+                if current_parent:
+                    cmds.parent(mirrored_root, world=True)
+                cmds.parent(mirrored_root, target_module.joint_grp)
+                print(f"Parented {mirrored_root} to {target_module.joint_grp}")
+        except Exception as e:
+            print(f"Error during mirroring operation: {str(e)}")
+            import traceback
+            traceback.print_exc()
 
         print(f"=== JOINT MIRRORING COMPLETE: {source_module.module_id} to {target_module.module_id} ===\n")
-        return True
-
-    def _mirror_controls(self, source_module, target_module):
-        """
-        Mirror controls from source module to target module.
-
-        Args:
-            source_module (BaseModule): Source module (left side)
-            target_module (BaseModule): Target module (right side)
-        """
-        # Make sure both modules have controls
-        if not source_module.controls or not target_module.controls:
-            print("Error: Controls not found in one or both modules")
-            return
-
-        print(f"Mirroring controls from {source_module.module_id} to {target_module.module_id}")
-
-        # Common control types between arms and legs
-        control_types = ["fk_", "ik_", "pole"]
-
-        # Add specific control types based on module type
-        if source_module.module_type == "arm":
-            control_names = [
-                "fk_shoulder", "fk_elbow", "fk_wrist",
-                "ik_wrist", "pole", "fkik_switch"
-            ]
-        elif source_module.module_type == "leg":
-            control_names = [
-                "fk_hip", "fk_knee", "fk_ankle",
-                "ik_ankle", "pole", "fkik_switch"
-            ]
-        else:
-            return  # Skip non-limb modules
-
-        # Mirror each control
-        for control_name in control_names:
-            # Skip if source or target control doesn't exist
-            if (control_name not in source_module.controls or
-                    control_name not in target_module.controls or
-                    not cmds.objExists(source_module.controls[control_name]) or
-                    not cmds.objExists(target_module.controls[control_name])):
-                continue
-
-            source_ctrl = source_module.controls[control_name]
-            target_ctrl = target_module.controls[control_name]
-
-            # Get the control's group for transformation
-            source_grp = f"{source_ctrl}_grp"
-            target_grp = f"{target_ctrl}_grp"
-
-            if not cmds.objExists(source_grp) or not cmds.objExists(target_grp):
-                # Try to find the group
-                source_parent = cmds.listRelatives(source_ctrl, parent=True)
-                target_parent = cmds.listRelatives(target_ctrl, parent=True)
-
-                if source_parent and target_parent:
-                    source_grp = source_parent[0]
-                    target_grp = target_parent[0]
-                else:
-                    continue  # Skip this control
-
-            # Mirror control transform group
-            # First check if we should mirror the group or the control directly
-            if cmds.objExists(source_grp) and cmds.objExists(target_grp):
-                # Mirror position and rotation
-                pos = cmds.xform(source_grp, query=True, translation=True, worldSpace=True)
-                rot = cmds.xform(source_grp, query=True, rotation=True, worldSpace=True)
-
-                # Mirror across YZ plane
-                mirror_pos = [-pos[0], pos[1], pos[2]]
-                mirror_rot = [rot[0], -rot[1], -rot[2]]
-
-                # Apply mirrored position and rotation
-                # NOTE: We may need to handle parent constraints and relative positioning
-                # Skip applying position if there's a parent constraint
-                constraints = cmds.listConnections(target_grp, type="constraint") or []
-
-                if not constraints:
-                    cmds.xform(target_grp, translation=mirror_pos, worldSpace=True)
-                    cmds.xform(target_grp, rotation=mirror_rot, worldSpace=True)
-                    print(
-                        f"Mirrored control: {control_name} from {source_module.module_id} to {target_module.module_id}")
-                else:
-                    print(f"Skipped constrained control: {control_name}")
-
-            # Mirror attributes for IK controls (foot attributes, etc.)
-            if control_name == "ik_ankle" and source_module.module_type == "leg":
-                # Copy foot attribute values
-                for attr_name in ["roll", "tilt", "toe", "heel"]:
-                    if (cmds.attributeQuery(attr_name, node=source_ctrl, exists=True) and
-                            cmds.attributeQuery(attr_name, node=target_ctrl, exists=True)):
-                        value = cmds.getAttr(f"{source_ctrl}.{attr_name}")
-
-                        # Flip sign for tilt attribute (side-to-side)
-                        if attr_name == "tilt":
-                            value = -value
-
-                        cmds.setAttr(f"{target_ctrl}.{attr_name}", value)
-
-            # Mirror FK/IK blend attribute
-            if control_name == "fkik_switch":
-                if cmds.attributeQuery("FkIkBlend", node=source_ctrl, exists=True) and cmds.attributeQuery("FkIkBlend",
-                                                                                                           node=target_ctrl,
-                                                                                                           exists=True):
-                    value = cmds.getAttr(f"{source_ctrl}.FkIkBlend")
-                    cmds.setAttr(f"{target_ctrl}.FkIkBlend", value)
 
     def _setup_mirrored_constraints(self, source_module, target_module):
         """
@@ -1020,14 +828,16 @@ class ModuleManager:
             # Select all cluster handles
             cmds.select(rig_clusters)
 
-            # Check if clusters group already exists
-            if cmds.objExists(self.clusters_grp):
-                # If it exists, use it as the parent
-                grouped_clusters = cmds.group(name=f"{self.character_name}_clusters_grp")
-                cmds.parent(grouped_clusters, self.clusters_grp)
-            else:
-                # If it doesn't exist, create as before
-                grouped_clusters = cmds.group(name=f"{self.character_name}_clusters")
+            # Ensure clusters group exists
+            clusters_grp_name = f"{self.character_name}_clusters"
+            if not cmds.objExists(clusters_grp_name):
+                clusters_grp = cmds.group(empty=True, name=clusters_grp_name)
+                cmds.parent(clusters_grp, self.guides_grp)
+                print(f"Created clusters group: {clusters_grp_name}")
+
+            # Create a new subgroup for these clusters
+            grouped_clusters = cmds.group(name=f"{self.character_name}_clusters_{len(rig_clusters)}")
+            cmds.parent(grouped_clusters, clusters_grp_name)
 
             # Set visibility off
             cmds.setAttr(f"{grouped_clusters}.visibility", 0)
@@ -1041,3 +851,494 @@ class ModuleManager:
         except Exception as e:
             print(f"Error organizing clusters: {e}")
             return 0
+
+    def connect_mirrored_joints(self):
+        """
+        Connect mirrored joints to establish proper hierarchy.
+        Runs after mirroring to ensure limb joints are properly connected to the spine.
+        """
+        print("\n=== CONNECTING MIRRORED JOINTS ===")
+
+        # Check if a root joint exists
+        root_joint_name = f"{self.character_name}_root_jnt"
+        root_joint_exists = cmds.objExists(root_joint_name)
+
+        # Find the spine module and key joints
+        spine_module = None
+        cog_joint = None
+        pelvis_joint = None
+        chest_joint = None
+
+        for module in self.modules.values():
+            if module.module_type == "spine":  # We want the spine module
+                spine_module = module
+                if "cog" in module.joints and cmds.objExists(module.joints["cog"]):
+                    cog_joint = module.joints["cog"]
+                if "pelvis" in module.joints and cmds.objExists(module.joints["pelvis"]):
+                    pelvis_joint = module.joints["pelvis"]
+                if "chest" in module.joints and cmds.objExists(module.joints["chest"]):
+                    chest_joint = module.joints["chest"]
+                break
+
+        # If no spine module found, we can't establish hierarchy
+        if not spine_module:
+            print("No spine module found, cannot establish hierarchy")
+            return
+
+        # STEP 1: If root joint exists, connect COG to it
+        if root_joint_exists and cog_joint:
+            try:
+                # Check current parent of COG
+                cog_parent = cmds.listRelatives(cog_joint, parent=True) or []
+                if not cog_parent or cog_parent[0] != root_joint_name:
+                    # Reparent COG to root
+                    cmds.parent(cog_joint, root_joint_name)
+                    print(f"Connected {cog_joint} to {root_joint_name}")
+            except Exception as e:
+                print(f"Error connecting COG to root: {str(e)}")
+
+        # STEP 2: Connect legs to pelvis
+        if pelvis_joint:
+            # Find all leg modules (both left and right sides)
+            leg_modules = [m for m in self.modules.values() if m.module_type == "leg"]
+
+            for leg_module in leg_modules:
+                try:
+                    if "hip" in leg_module.joints and cmds.objExists(leg_module.joints["hip"]):
+                        hip_joint = leg_module.joints["hip"]
+                        # Check current parent
+                        hip_parent = cmds.listRelatives(hip_joint, parent=True) or []
+
+                        # Only reparent if needed
+                        if not hip_parent or hip_parent[0] != pelvis_joint:
+                            # Unparent first to avoid hierarchy issues
+                            cmds.parent(hip_joint, world=True)
+                            # Then parent to pelvis
+                            cmds.parent(hip_joint, pelvis_joint)
+                            print(f"Connected {hip_joint} to {pelvis_joint}")
+                except Exception as e:
+                    print(f"Error connecting hip to pelvis: {str(e)}")
+
+        # STEP 3: Connect arms to chest
+        if chest_joint:
+            # Find all arm modules (both left and right sides)
+            arm_modules = [m for m in self.modules.values() if m.module_type == "arm"]
+
+            for arm_module in arm_modules:
+                try:
+                    if "clavicle" in arm_module.joints and cmds.objExists(arm_module.joints["clavicle"]):
+                        clavicle_joint = arm_module.joints["clavicle"]
+                        # Check current parent
+                        clavicle_parent = cmds.listRelatives(clavicle_joint, parent=True) or []
+
+                        # Only reparent if needed
+                        if not clavicle_parent or clavicle_parent[0] != chest_joint:
+                            # Unparent first to avoid hierarchy issues
+                            cmds.parent(clavicle_joint, world=True)
+                            # Then parent to chest
+                            cmds.parent(clavicle_joint, chest_joint)
+                            print(f"Connected {clavicle_joint} to {chest_joint}")
+                except Exception as e:
+                    print(f"Error connecting clavicle to chest: {str(e)}")
+
+        print("=== JOINT CONNECTION COMPLETE ===\n")
+
+    def _mirror_controls(self, source_module, target_module):
+        """
+        Mirror controls from source module to target module.
+        This should be called after joints have been mirrored.
+
+        Args:
+            source_module (BaseModule): Source module (left side)
+            target_module (BaseModule): Target module (right side)
+        """
+        if not source_module.controls:
+            print("Source module has no controls to mirror")
+            return
+
+        print(f"\n=== MIRRORING CONTROLS from {source_module.module_id} to {target_module.module_id} ===")
+
+        # Clear target module's controls dictionary
+        target_module.controls = {}
+
+        # Create equivalent control structures for the target module
+        # Depending on module type, we'll create different controls
+        if source_module.module_type == "arm":
+            # Create clavicle control if it exists
+            if "clavicle" in source_module.controls and "clavicle" in target_module.joints:
+                self._mirror_single_control(source_module, target_module, "clavicle", "clavicle")
+
+            # Mirror main controls
+            if "clavicle" in target_module.controls:
+                parent_control = target_module.controls["clavicle"]
+            else:
+                parent_control = target_module.control_grp
+
+            # FK controls
+            fk_controls = ["fk_shoulder", "fk_elbow", "fk_wrist"]
+            for i, ctrl_name in enumerate(fk_controls):
+                parent = parent_control if i == 0 else target_module.controls.get(fk_controls[i - 1])
+                self._mirror_single_control(source_module, target_module, ctrl_name, fk_controls[i], parent)
+
+            # IK controls
+            self._mirror_single_control(source_module, target_module, "ik_wrist", "ik_wrist", target_module.control_grp)
+            self._mirror_single_control(source_module, target_module, "pole", "pole", target_module.control_grp)
+
+            # Mirror IK handle if it exists
+            if "ik_handle" in source_module.controls and target_module.joint_grp:
+                source_ik = source_module.controls["ik_handle"]
+
+                # Create the IK handle on the target side
+                if "ik_shoulder" in target_module.joints and "ik_wrist" in target_module.joints:
+                    print(f"Creating IK handle for {target_module.module_id}")
+                    ik_handle, effector = cmds.ikHandle(
+                        name=f"{target_module.module_id}_arm_ikh",
+                        startJoint=target_module.joints["ik_shoulder"],
+                        endEffector=target_module.joints["ik_wrist"],
+                        solver="ikRPsolver"
+                    )
+
+                    # Parent to IK wrist control if it exists
+                    if "ik_wrist" in target_module.controls:
+                        cmds.parent(ik_handle, target_module.controls["ik_wrist"])
+                    else:
+                        cmds.parent(ik_handle, target_module.control_grp)
+
+                    target_module.controls["ik_handle"] = ik_handle
+
+                    # Set up pole vector constraint
+                    if "pole" in target_module.controls:
+                        cmds.poleVectorConstraint(
+                            target_module.controls["pole"],
+                            ik_handle
+                        )
+
+            # FKIK Switch
+            self._mirror_single_control(source_module, target_module, "fkik_switch", "fkik_switch",
+                                        target_module.control_grp)
+
+            # Set up constraints
+            if "fkik_switch" in target_module.controls:
+                # Create reverse node
+                reverse_node = cmds.createNode("reverse", name=f"{target_module.module_id}_fkik_reverse")
+                cmds.connectAttr(f"{target_module.controls['fkik_switch']}.FkIkBlend", f"{reverse_node}.inputX")
+
+                # Connect main joint chain to IK/FK
+                joint_pairs = [
+                    ("shoulder", "ik_shoulder", "fk_shoulder"),
+                    ("elbow", "ik_elbow", "fk_elbow"),
+                    ("wrist", "ik_wrist", "fk_wrist"),
+                    ("hand", "ik_hand", "fk_hand")
+                ]
+
+                for bind_joint, ik_joint, fk_joint in joint_pairs:
+                    if all(key in target_module.joints for key in [bind_joint, ik_joint, fk_joint]):
+                        # Create constraint
+                        constraint = cmds.parentConstraint(
+                            target_module.joints[ik_joint],
+                            target_module.joints[fk_joint],
+                            target_module.joints[bind_joint],
+                            maintainOffset=True
+                        )[0]
+
+                        # Connect weights
+                        weights = cmds.parentConstraint(constraint, query=True, weightAliasList=True)
+                        if len(weights) == 2:
+                            cmds.connectAttr(f"{target_module.controls['fkik_switch']}.FkIkBlend",
+                                             f"{constraint}.{weights[0]}")
+                            cmds.connectAttr(f"{reverse_node}.outputX", f"{constraint}.{weights[1]}")
+
+        elif source_module.module_type == "leg":
+            # Mirror FK controls
+            fk_controls = ["fk_hip", "fk_knee", "fk_ankle"]
+            for i, ctrl_name in enumerate(fk_controls):
+                parent = target_module.control_grp if i == 0 else target_module.controls.get(fk_controls[i - 1])
+                self._mirror_single_control(source_module, target_module, ctrl_name, fk_controls[i], parent)
+
+            # Mirror IK controls
+            self._mirror_single_control(source_module, target_module, "ik_ankle", "ik_ankle", target_module.control_grp)
+            self._mirror_single_control(source_module, target_module, "pole", "pole", target_module.control_grp)
+
+            # Mirror IK handle and foot roll system
+            if "ik_handle" in source_module.controls and target_module.joint_grp:
+                # Create the IK handle
+                if "ik_hip" in target_module.joints and "ik_ankle" in target_module.joints:
+                    print(f"Creating IK handle for {target_module.module_id}")
+                    ik_handle, effector = cmds.ikHandle(
+                        name=f"{target_module.module_id}_leg_ikh",
+                        startJoint=target_module.joints["ik_hip"],
+                        endEffector=target_module.joints["ik_ankle"],
+                        solver="ikRPsolver"
+                    )
+
+                    target_module.controls["ik_handle"] = ik_handle
+
+                    # Create foot roll system
+                    if "ik_ankle" in target_module.joints and "ik_foot" in target_module.joints and "ik_toe" in target_module.joints:
+                        # Create ankle to foot IK handle
+                        ankle_foot_ik, ankle_foot_eff = cmds.ikHandle(
+                            name=f"{target_module.module_id}_ankle_foot_ikh",
+                            startJoint=target_module.joints["ik_ankle"],
+                            endEffector=target_module.joints["ik_foot"],
+                            solver="ikSCsolver"
+                        )
+
+                        # Create foot to toe IK handle
+                        foot_toe_ik, foot_toe_eff = cmds.ikHandle(
+                            name=f"{target_module.module_id}_foot_toe_ikh",
+                            startJoint=target_module.joints["ik_foot"],
+                            endEffector=target_module.joints["ik_toe"],
+                            solver="ikSCsolver"
+                        )
+
+                        # Get position data from joints
+                        ankle_pos = cmds.xform(target_module.joints["ik_ankle"], query=True, translation=True,
+                                               worldSpace=True)
+                        foot_pos = cmds.xform(target_module.joints["ik_foot"], query=True, translation=True,
+                                              worldSpace=True)
+                        toe_pos = cmds.xform(target_module.joints["ik_toe"], query=True, translation=True,
+                                             worldSpace=True)
+
+                        # Get heel position
+                        if "heel" in target_module.guides and cmds.objExists(target_module.guides["heel"]):
+                            heel_pos = cmds.xform(target_module.guides["heel"], query=True, translation=True,
+                                                  worldSpace=True)
+                        else:
+                            heel_pos = [foot_pos[0], foot_pos[1], foot_pos[2] - 5.0]
+
+                        # Create foot roll hierarchy
+                        foot_roll_grp = cmds.group(empty=True, name=f"{target_module.module_id}_foot_roll_grp")
+                        heel_grp = cmds.group(empty=True, name=f"{target_module.module_id}_heel_pivot_grp")
+                        toe_grp = cmds.group(empty=True, name=f"{target_module.module_id}_toe_pivot_grp")
+                        ball_grp = cmds.group(empty=True, name=f"{target_module.module_id}_ball_pivot_grp")
+                        ankle_grp = cmds.group(empty=True, name=f"{target_module.module_id}_ankle_pivot_grp")
+
+                        # Position the groups
+                        cmds.xform(foot_roll_grp, translation=[0, 0, 0], worldSpace=True)
+                        cmds.xform(heel_grp, translation=heel_pos, worldSpace=True)
+                        cmds.xform(toe_grp, translation=toe_pos, worldSpace=True)
+                        cmds.xform(ball_grp, translation=foot_pos, worldSpace=True)
+                        cmds.xform(ankle_grp, translation=ankle_pos, worldSpace=True)
+
+                        # Create hierarchy
+                        cmds.parent(foot_roll_grp, target_module.control_grp)
+                        cmds.parent(heel_grp, foot_roll_grp)
+                        cmds.parent(toe_grp, heel_grp)
+                        cmds.parent(ball_grp, toe_grp)
+                        cmds.parent(ankle_grp, ball_grp)
+
+                        # Parent IK handles
+                        cmds.parent(foot_toe_ik, ball_grp)
+                        cmds.parent(ankle_foot_ik, ankle_grp)
+                        cmds.parent(ik_handle, ankle_grp)
+
+                        # Store references
+                        target_module.controls["foot_roll_grp"] = foot_roll_grp
+                        target_module.controls["heel_pivot"] = heel_grp
+                        target_module.controls["toe_pivot"] = toe_grp
+                        target_module.controls["ball_pivot"] = ball_grp
+                        target_module.controls["ankle_pivot"] = ankle_grp
+                        target_module.controls["ankle_foot_ik"] = ankle_foot_ik
+                        target_module.controls["foot_toe_ik"] = foot_toe_ik
+
+                        # Connect foot roll group to ankle control
+                        if "ik_ankle" in target_module.controls:
+                            cmds.parentConstraint(
+                                target_module.controls["ik_ankle"],
+                                foot_roll_grp,
+                                maintainOffset=True
+                            )
+
+                    # Set up pole vector constraint
+                    if "pole" in target_module.controls:
+                        cmds.poleVectorConstraint(
+                            target_module.controls["pole"],
+                            ik_handle
+                        )
+
+            # FKIK Switch
+            self._mirror_single_control(source_module, target_module, "fkik_switch", "fkik_switch",
+                                        target_module.control_grp)
+
+            # Set up constraints
+            if "fkik_switch" in target_module.controls:
+                # Create reverse node
+                reverse_node = cmds.createNode("reverse", name=f"{target_module.module_id}_fkik_reverse")
+                cmds.connectAttr(f"{target_module.controls['fkik_switch']}.FkIkBlend", f"{reverse_node}.inputX")
+
+                # Connect main joint chain to IK/FK
+                joint_pairs = [
+                    ("hip", "ik_hip", "fk_hip"),
+                    ("knee", "ik_knee", "fk_knee"),
+                    ("ankle", "ik_ankle", "fk_ankle"),
+                    ("foot", "ik_foot", "fk_foot"),
+                    ("toe", "ik_toe", "fk_toe")
+                ]
+
+                for bind_joint, ik_joint, fk_joint in joint_pairs:
+                    if all(key in target_module.joints for key in [bind_joint, ik_joint, fk_joint]):
+                        # Create constraint
+                        constraint = cmds.parentConstraint(
+                            target_module.joints[ik_joint],
+                            target_module.joints[fk_joint],
+                            target_module.joints[bind_joint],
+                            maintainOffset=True
+                        )[0]
+
+                        # Connect weights
+                        weights = cmds.parentConstraint(constraint, query=True, weightAliasList=True)
+                        if len(weights) == 2:
+                            cmds.connectAttr(f"{target_module.controls['fkik_switch']}.FkIkBlend",
+                                             f"{constraint}.{weights[0]}")
+                            cmds.connectAttr(f"{reverse_node}.outputX", f"{constraint}.{weights[1]}")
+
+        print(f"=== CONTROL MIRRORING COMPLETE: {source_module.module_id} to {target_module.module_id} ===\n")
+
+    def _mirror_single_control(self, source_module, target_module, source_key, target_key, parent=None):
+        """
+        Mirror a single control from source module to target module.
+
+        Args:
+            source_module: Source module containing the original control
+            target_module: Target module to create the mirrored control in
+            source_key: Key to look up the control in source_module.controls
+            target_key: Key to use for the control in target_module.controls
+            parent: Parent for the new control
+        """
+        if source_key not in source_module.controls:
+            print(f"Source control {source_key} not found")
+            return
+
+        source_ctrl = source_module.controls[source_key]
+
+        if not cmds.objExists(source_ctrl):
+            print(f"Source control {source_ctrl} does not exist")
+            return
+
+        # Determine control shape
+        shapes = cmds.listRelatives(source_ctrl, shapes=True) or []
+        if not shapes:
+            print(f"Source control {source_ctrl} has no shapes")
+            return
+
+        # Determine control type based on shape
+        shape_type = "circle"  # default
+        color = [1, 1, 0]  # default yellow
+
+        if "_fk_" in source_ctrl:
+            shape_type = "circle"
+            color = [0.2, 0.8, 0.2]  # green for FK
+        elif "_ik_" in source_ctrl:
+            shape_type = "cube"
+            color = [0.8, 0.2, 0.8]  # purple for IK
+        elif "pole" in source_ctrl:
+            shape_type = "sphere"
+            color = [0.8, 0.2, 0.8]  # purple for pole vector
+        elif "fkik_switch" in source_ctrl:
+            shape_type = "square"
+            color = [1, 1, 0]  # yellow for switch
+        elif "clavicle" in source_ctrl:
+            shape_type = "circle"
+            color = [0.2, 0.8, 0.2]  # green like FK
+
+        # Create the control with the same shape and color
+        target_ctrl_name = source_ctrl.replace(f"{source_module.side}_", f"{target_module.side}_")
+
+        # Get position from corresponding joint
+        joint_key = target_key
+        if "fk_" in target_key:
+            joint_key = target_key
+        elif "ik_" in target_key:
+            joint_key = target_key
+        elif target_key == "pole":
+            joint_key = "elbow" if target_module.module_type == "arm" else "knee"
+        elif target_key == "fkik_switch":
+            joint_key = "wrist" if target_module.module_type == "arm" else "ankle"
+        elif target_key == "clavicle":
+            joint_key = "clavicle"
+
+        # Get control size by measuring the source control
+        size = 7.0  # default
+        if cmds.objExists(source_ctrl):
+            bounding_box = cmds.exactWorldBoundingBox(source_ctrl)
+            size = max(
+                bounding_box[3] - bounding_box[0],  # x size
+                bounding_box[4] - bounding_box[1],  # y size
+                bounding_box[5] - bounding_box[2]  # z size
+            ) / 2.0
+
+        # Create the control
+        if joint_key in target_module.joints:
+            target_joint = target_module.joints[joint_key]
+
+            # Get position from joint
+            pos = cmds.xform(target_joint, query=True, translation=True, worldSpace=True)
+
+            # Special handling for pole vector
+            if target_key == "pole":
+                if target_module.module_type == "arm":
+                    pos = [pos[0], pos[1], -50.0]  # Put arm pole vector at Z=-50
+                else:
+                    pos = [pos[0], pos[1] + 50.0, pos[2]]  # Put leg pole vector 50 units up
+
+            # Special handling for FK/IK switch
+            if target_key == "fkik_switch":
+                if target_module.module_type == "arm":
+                    pos = [pos[0], pos[1] + 5.0, pos[2]]  # Put switch 5 units above wrist
+                else:
+                    if target_module.side == "l":
+                        pos = [pos[0] + 5.0, pos[1], pos[2]]  # Put switch 5 units to the right of ankle
+                    else:
+                        pos = [pos[0] - 5.0, pos[1], pos[2]]  # Put switch 5 units to the left of ankle
+
+            # Create the control
+            target_ctrl, target_grp = create_control(
+                target_ctrl_name,
+                shape_type,
+                size,
+                color
+            )
+
+            # Position the control
+            cmds.xform(target_grp, translation=pos, worldSpace=True)
+
+            # Get rotation from joint
+            rot = cmds.xform(target_joint, query=True, rotation=True, worldSpace=True)
+            cmds.xform(target_grp, rotation=rot, worldSpace=True)
+
+            # Parent appropriately
+            if parent:
+                cmds.parent(target_grp, parent)
+            else:
+                cmds.parent(target_grp, target_module.control_grp)
+
+            # For FK controls, connect to corresponding joint
+            if "fk_" in target_key and f"fk_{joint_key}" in target_module.joints:
+                cmds.parentConstraint(target_ctrl, target_module.joints[f"fk_{joint_key}"], maintainOffset=True)
+
+            # For clavicle control, connect to clavicle joint
+            if target_key == "clavicle" and "clavicle" in target_module.joints:
+                cmds.parentConstraint(target_ctrl, target_module.joints["clavicle"], maintainOffset=True)
+
+            # For IK controls, some specialized handling:
+            if target_key in ["ik_wrist", "ik_ankle"]:
+                # Orient constraint to corresponding IK joint
+                cmds.orientConstraint(target_ctrl, target_module.joints[target_key], maintainOffset=True)
+
+                # Add attributes for foot controls
+                if target_key == "ik_ankle":
+                    for attr_name in ["roll", "tilt", "toe", "heel"]:
+                        if not cmds.attributeQuery(attr_name, node=target_ctrl, exists=True):
+                            cmds.addAttr(target_ctrl, longName=attr_name, attributeType="float", defaultValue=0,
+                                         keyable=True)
+
+            # For FK/IK switch, add the blend attribute
+            if target_key == "fkik_switch":
+                if not cmds.attributeQuery("FkIkBlend", node=target_ctrl, exists=True):
+                    cmds.addAttr(target_ctrl, longName="FkIkBlend", attributeType="float", min=0, max=1, defaultValue=1,
+                                 keyable=True)
+
+            # Store the control
+            target_module.controls[target_key] = target_ctrl
+            print(f"Created control {target_key}: {target_ctrl}")
+            return target_ctrl
