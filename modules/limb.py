@@ -2371,8 +2371,8 @@ class LimbModule(BaseModule):
 
     def _create_clavicle_setup(self):
         """
-        Creates a clavicle joint and control that works with both FK and IK chains.
-        This adds the clavicle without changing the existing chain structure.
+        Creates a clavicle joint and control that works with all joint chains.
+        Ensures FK controls are properly parented under the clavicle control.
         """
         if self.limb_type != "arm":
             return  # Only for arms
@@ -2382,82 +2382,98 @@ class LimbModule(BaseModule):
             print(f"No clavicle guide found for {self.module_id}, skipping clavicle setup")
             return
 
-        # Get clavicle position
+        # Get clavicle and shoulder positions
         clavicle_pos = cmds.xform(self.guides["clavicle"], query=True, translation=True, worldSpace=True)
-
-        # Get shoulder position for orientation
         shoulder_pos = cmds.xform(self.guides["shoulder"], query=True, translation=True, worldSpace=True)
 
         # Create clavicle joint
         cmds.select(clear=True)
         cmds.select(self.joint_grp)
         clavicle_joint = cmds.joint(name=f"{self.module_id}_clavicle_jnt", position=clavicle_pos)
+
+        # Create temporary shoulder joint to help with orientation
+        cmds.select(clavicle_joint)
+        temp_shoulder = cmds.joint(name="temp_shoulder", position=shoulder_pos)
+
+        # Orient the joint chain properly
+        cmds.joint(clavicle_joint, e=True, oj="xyz", secondaryAxisOrient="yup", zeroScaleOrient=True)
+
+        # Store the clavicle joint
         self.joints["clavicle"] = clavicle_joint
 
-        # Store current parents of main chains' shoulder joints
-        parents = {}
+        # Delete the temporary shoulder joint
+        cmds.delete(temp_shoulder)
+
+        # Create circle control with proper orientation
+        circle = cmds.circle(name=f"{self.module_id}_clavicle_ctrl", normal=[0, 1, 0], radius=7.0)[0]
+
+        # Rotate -90 in Z to orient the opening along X
+        cmds.rotate(0, 0, -90, circle, relative=True, objectSpace=True)
+
+        # Freeze transformations
+        cmds.makeIdentity(circle, apply=True, translate=True, rotate=True, scale=True)
+
+        # Apply color
+        set_color_override(circle, CONTROL_COLORS["fk"])
+
+        # Create control group
+        circle_grp = cmds.group(circle, name=f"{circle}_grp")
+
+        # Position at clavicle
+        temp_constraint = cmds.parentConstraint(clavicle_joint, circle_grp, maintainOffset=False)[0]
+        cmds.delete(temp_constraint)
+
+        # Store reference and parent to control group
+        self.controls["clavicle"] = circle
+        cmds.parent(circle_grp, self.control_grp)
+
+        # Connect control to joint
+        cmds.parentConstraint(circle, clavicle_joint, maintainOffset=True)
+
+        # Parent all shoulder joints (main, FK, IK) under the clavicle
         for prefix in ["", "fk_", "ik_"]:
             key = f"{prefix}shoulder"
             if key in self.joints and cmds.objExists(self.joints[key]):
-                parents[key] = cmds.listRelatives(self.joints[key], parent=True) or []
-
-        # Create clavicle control
-        clavicle_ctrl, clavicle_grp = create_control(
-            f"{self.module_id}_clavicle_ctrl",
-            "circle",
-            7.0,  # Size
-            CONTROL_COLORS["fk"],  # Use FK color
-            normal=[0, 1, 0]  # Initial orientation
-        )
-
-        # Position and orient the control
-        cmds.xform(clavicle_grp, translation=clavicle_pos, worldSpace=True)
-
-        # Aim constraint temporarily to orient toward shoulder
-        temp_loc = cmds.spaceLocator(name="temp_aim_loc")[0]
-        cmds.xform(temp_loc, translation=shoulder_pos, worldSpace=True)
-
-        temp_constraint = cmds.aimConstraint(
-            temp_loc,
-            clavicle_grp,
-            aimVector=[1, 0, 0],  # Aim X axis toward shoulder
-            upVector=[0, 1, 0],  # Keep Y up
-            worldUpType="vector",
-            worldUpVector=[0, 1, 0]
-        )[0]
-
-        cmds.delete(temp_constraint, temp_loc)
-
-        # Parent the control under the control group
-        cmds.parent(clavicle_grp, self.control_grp)
-        self.controls["clavicle"] = clavicle_ctrl
-
-        # Connect clavicle control to joint
-        cmds.parentConstraint(clavicle_ctrl, clavicle_joint, maintainOffset=True)
-
-        # Now re-parent each shoulder to clavicle
-        for prefix in ["", "fk_", "ik_"]:
-            key = f"{prefix}shoulder"
-            if key in self.joints and cmds.objExists(self.joints[key]):
-                # Unparent from current parent
-                if parents[key]:
+                # Get current parent
+                current_parent = cmds.listRelatives(self.joints[key], parent=True) or []
+                if current_parent:
+                    # Unparent first
                     cmds.parent(self.joints[key], world=True)
 
                 # Parent to clavicle
                 cmds.parent(self.joints[key], clavicle_joint)
-                print(f"Reparented {key} to clavicle")
+                print(f"Parented {key} joint to clavicle")
 
-        # Ensure the clavicle control is always visible in both FK/IK modes
-        # Find FK/IK switch if it exists
-        switch_ctrl = self.controls.get("fkik_switch")
-        if switch_ctrl and cmds.attributeQuery("FkIkBlend", node=switch_ctrl, exists=True):
-            # Remove any connections to visibility attribute
-            connections = cmds.listConnections(f"{clavicle_ctrl}.visibility", source=True, destination=False,
-                                               plugs=True) or []
-            for connection in connections:
-                cmds.disconnectAttr(connection, f"{clavicle_ctrl}.visibility")
+        # CRITICAL FIX: Reparent the FK shoulder control group to be under the clavicle control
+        if "fk_shoulder" in self.controls and cmds.objExists(self.controls["fk_shoulder"]):
+            # Find the FK shoulder control group - look for both naming conventions
+            possible_group_names = [
+                f"{self.controls['fk_shoulder']}_grp",
+                f"{self.module_id}_shoulder_fk_ctrl_grp"
+            ]
 
-            # Set visibility on
-            cmds.setAttr(f"{clavicle_ctrl}.visibility", 1)
+            found_group = None
+            for grp_name in possible_group_names:
+                if cmds.objExists(grp_name):
+                    found_group = grp_name
+                    break
+
+            # If we found the group, reparent it
+            if found_group:
+                # Print current parent for debugging
+                current_parent = cmds.listRelatives(found_group, parent=True) or []
+                print(f"FK shoulder control group '{found_group}' current parent: {current_parent}")
+
+                # Unparent from current parent
+                cmds.parent(found_group, world=True)
+
+                # Parent to clavicle control
+                cmds.parent(found_group, circle)
+                print(f"Reparented FK shoulder control group '{found_group}' to clavicle control")
+            else:
+                print(f"WARNING: Could not find FK shoulder control group to parent under clavicle")
+                # Print all existing nodes that might be related
+                for node in cmds.ls(f"*{self.module_id}*fk*shoulder*", long=True):
+                    print(f"  Found potential FK control: {node}")
 
         print(f"Created clavicle setup for {self.module_id}")
