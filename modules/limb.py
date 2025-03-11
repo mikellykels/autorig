@@ -2448,58 +2448,18 @@ class LimbModule(BaseModule):
         if self.limb_type != "arm":
             return  # Only for arms
 
-        print(f"\n=== FINALIZING CLAVICLE CONNECTION FOR {self.module_id} ===")
-
-        # Use EXACT node names rather than dictionary lookup
+        # Use exact node names rather than dictionary lookup
         fk_ctrl_grp = f"{self.module_id}_shoulder_fk_ctrl_grp"
         clavicle_ctrl = f"{self.module_id}_clavicle_ctrl"
 
         # Verify both exist
-        fk_ctrl_grp_exists = cmds.objExists(fk_ctrl_grp)
-        print(f"FK Control Group '{fk_ctrl_grp}' exists: {fk_ctrl_grp_exists}")
-
-        clavicle_ctrl_exists = cmds.objExists(clavicle_ctrl)
-        print(f"Clavicle Control '{clavicle_ctrl}' exists: {clavicle_ctrl_exists}")
-
-        if not fk_ctrl_grp_exists or not clavicle_ctrl_exists:
-            print("ERROR: Required nodes don't exist, cannot complete clavicle connection")
-            # Try ls to find similar nodes for debugging
-            print("Available nodes with similar names:")
-            for node in cmds.ls(f"*{self.module_id}*shoulder*fk*"):
-                print(f"  - {node}")
-            for node in cmds.ls(f"*{self.module_id}*clavicle*"):
-                print(f"  - {node}")
+        if not cmds.objExists(fk_ctrl_grp) or not cmds.objExists(clavicle_ctrl):
+            print(f"Cannot complete clavicle connection for {self.module_id}: required nodes not found")
             return
 
         try:
-            # Do an extra safe check - make sure the clavicle control is actually a transform node
-            if cmds.objectType(clavicle_ctrl) != "transform":
-                print(f"WARNING: {clavicle_ctrl} is not a transform node. Getting parent...")
-                parent = cmds.listRelatives(clavicle_ctrl, parent=True)
-                if parent:
-                    clavicle_ctrl = parent[0]
-                    print(f"Using parent instead: {clavicle_ctrl}")
-
-            # DIRECT PARENTING APPROACH
-            print(f"DIRECT PARENTING: {fk_ctrl_grp} -> {clavicle_ctrl}")
-            current_parent = cmds.listRelatives(fk_ctrl_grp, parent=True) or []
-            print(f"Current parent of {fk_ctrl_grp}: {current_parent}")
-
-            # Execute exactly like your manual steps
+            # Direct parenting operation
             cmds.parent(fk_ctrl_grp, clavicle_ctrl)
-
-            # Verify new parent
-            new_parent = cmds.listRelatives(fk_ctrl_grp, parent=True) or []
-            print(f"New parent of {fk_ctrl_grp}: {new_parent}")
-
-            if new_parent and new_parent[0] == clavicle_ctrl:
-                print("SUCCESS: Clavicle connection completed!")
-            else:
-                print(f"WARNING: Parenting operation completed, but verification failed")
-
+            print(f"Connected {fk_ctrl_grp} to {clavicle_ctrl}")
         except Exception as e:
-            print(f"ERROR during parenting operation: {str(e)}")
-            import traceback
-            traceback.print_exc()
-
-        print(f"=== CLAVICLE CONNECTION FINALIZED ===\n")
+            print(f"Error connecting clavicle to FK shoulder: {str(e)}")
