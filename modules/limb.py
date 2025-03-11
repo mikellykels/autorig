@@ -210,17 +210,6 @@ class LimbModule(BaseModule):
         print("\n--- STEP 2: CREATING JOINTS WITH ORIENTATION ---")
         self._create_joints_with_orientation()
 
-        # Debug: Check if joints were created successfully
-        print("\nVerifying joint creation:")
-        for joint_name in ["shoulder", "elbow", "wrist", "hand"] if self.limb_type == "arm" else ["hip", "knee",
-                                                                                                  "ankle", "foot",
-                                                                                                  "toe"]:
-            if joint_name in self.joints and cmds.objExists(self.joints[joint_name]):
-                pos = cmds.xform(self.joints[joint_name], query=True, translation=True, worldSpace=True)
-                print(f"  {joint_name}: Created at {pos}")
-            else:
-                print(f"  {joint_name}: NOT CREATED")
-
         # 3. Create IK chain
         print("\n--- STEP 3: CREATING IK CHAIN ---")
         self._create_ik_chain()
@@ -252,6 +241,11 @@ class LimbModule(BaseModule):
         # 8. Finalize the FK/IK switch
         print("\n--- STEP 8: FINALIZING FK/IK SWITCH ---")
         self._finalize_fkik_switch()
+
+        # 9. Finalize clavicle connection (NEWLY ADDED STEP)
+        if self.limb_type == "arm":
+            print("\n--- STEP 9: FINALIZING CLAVICLE CONNECTION ---")
+            self._finalize_clavicle_connection()
 
         print(f"\nBuild complete for {self.module_id}")
 
@@ -2372,7 +2366,7 @@ class LimbModule(BaseModule):
     def _create_clavicle_setup(self):
         """
         Creates a clavicle joint and control that works with all joint chains.
-        Ensures FK controls are properly parented under the clavicle control.
+        The FK shoulder control will be parented later in finalize method.
         """
         if self.limb_type != "arm":
             return  # Only for arms
@@ -2444,36 +2438,68 @@ class LimbModule(BaseModule):
                 cmds.parent(self.joints[key], clavicle_joint)
                 print(f"Parented {key} joint to clavicle")
 
-        # CRITICAL FIX: Reparent the FK shoulder control group to be under the clavicle control
-        if "fk_shoulder" in self.controls and cmds.objExists(self.controls["fk_shoulder"]):
-            # Find the FK shoulder control group - look for both naming conventions
-            possible_group_names = [
-                f"{self.controls['fk_shoulder']}_grp",
-                f"{self.module_id}_shoulder_fk_ctrl_grp"
-            ]
-
-            found_group = None
-            for grp_name in possible_group_names:
-                if cmds.objExists(grp_name):
-                    found_group = grp_name
-                    break
-
-            # If we found the group, reparent it
-            if found_group:
-                # Print current parent for debugging
-                current_parent = cmds.listRelatives(found_group, parent=True) or []
-                print(f"FK shoulder control group '{found_group}' current parent: {current_parent}")
-
-                # Unparent from current parent
-                cmds.parent(found_group, world=True)
-
-                # Parent to clavicle control
-                cmds.parent(found_group, circle)
-                print(f"Reparented FK shoulder control group '{found_group}' to clavicle control")
-            else:
-                print(f"WARNING: Could not find FK shoulder control group to parent under clavicle")
-                # Print all existing nodes that might be related
-                for node in cmds.ls(f"*{self.module_id}*fk*shoulder*", long=True):
-                    print(f"  Found potential FK control: {node}")
-
         print(f"Created clavicle setup for {self.module_id}")
+
+    def _finalize_clavicle_connection(self):
+        """
+        Finalize the connection between clavicle control and FK shoulder control.
+        This goes directly by name rather than using the control dictionary.
+        """
+        if self.limb_type != "arm":
+            return  # Only for arms
+
+        print(f"\n=== FINALIZING CLAVICLE CONNECTION FOR {self.module_id} ===")
+
+        # Use EXACT node names rather than dictionary lookup
+        fk_ctrl_grp = f"{self.module_id}_shoulder_fk_ctrl_grp"
+        clavicle_ctrl = f"{self.module_id}_clavicle_ctrl"
+
+        # Verify both exist
+        fk_ctrl_grp_exists = cmds.objExists(fk_ctrl_grp)
+        print(f"FK Control Group '{fk_ctrl_grp}' exists: {fk_ctrl_grp_exists}")
+
+        clavicle_ctrl_exists = cmds.objExists(clavicle_ctrl)
+        print(f"Clavicle Control '{clavicle_ctrl}' exists: {clavicle_ctrl_exists}")
+
+        if not fk_ctrl_grp_exists or not clavicle_ctrl_exists:
+            print("ERROR: Required nodes don't exist, cannot complete clavicle connection")
+            # Try ls to find similar nodes for debugging
+            print("Available nodes with similar names:")
+            for node in cmds.ls(f"*{self.module_id}*shoulder*fk*"):
+                print(f"  - {node}")
+            for node in cmds.ls(f"*{self.module_id}*clavicle*"):
+                print(f"  - {node}")
+            return
+
+        try:
+            # Do an extra safe check - make sure the clavicle control is actually a transform node
+            if cmds.objectType(clavicle_ctrl) != "transform":
+                print(f"WARNING: {clavicle_ctrl} is not a transform node. Getting parent...")
+                parent = cmds.listRelatives(clavicle_ctrl, parent=True)
+                if parent:
+                    clavicle_ctrl = parent[0]
+                    print(f"Using parent instead: {clavicle_ctrl}")
+
+            # DIRECT PARENTING APPROACH
+            print(f"DIRECT PARENTING: {fk_ctrl_grp} -> {clavicle_ctrl}")
+            current_parent = cmds.listRelatives(fk_ctrl_grp, parent=True) or []
+            print(f"Current parent of {fk_ctrl_grp}: {current_parent}")
+
+            # Execute exactly like your manual steps
+            cmds.parent(fk_ctrl_grp, clavicle_ctrl)
+
+            # Verify new parent
+            new_parent = cmds.listRelatives(fk_ctrl_grp, parent=True) or []
+            print(f"New parent of {fk_ctrl_grp}: {new_parent}")
+
+            if new_parent and new_parent[0] == clavicle_ctrl:
+                print("SUCCESS: Clavicle connection completed!")
+            else:
+                print(f"WARNING: Parenting operation completed, but verification failed")
+
+        except Exception as e:
+            print(f"ERROR during parenting operation: {str(e)}")
+            import traceback
+            traceback.print_exc()
+
+        print(f"=== CLAVICLE CONNECTION FINALIZED ===\n")
