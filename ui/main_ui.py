@@ -445,7 +445,7 @@ class ModularRigUI(QtWidgets.QDialog):
             self.module_list.addItem(list_item)
 
     def add_root_joint(self):
-        """Add a root joint and create proper joint hierarchy."""
+        """Add a root joint and create proper joint hierarchy, connecting controls appropriately."""
         if not self.manager:
             QtWidgets.QMessageBox.warning(self, "Warning", "Please initialize the rig first.")
             return
@@ -483,9 +483,14 @@ class ModularRigUI(QtWidgets.QDialog):
 
             # Find the COG joint
             cog_joint = None
+            spine_module = None
+            cog_control = None
             for module in self.manager.modules.values():
                 if isinstance(module, SpineModule) and "cog" in module.joints:
+                    spine_module = module
                     cog_joint = module.joints["cog"]
+                    if "cog" in module.controls:
+                        cog_control = module.controls["cog"]
                     break
 
             if not cog_joint or not cmds.objExists(cog_joint):
@@ -499,22 +504,21 @@ class ModularRigUI(QtWidgets.QDialog):
 
             # STEP 2: Find the pelvis joint in the spine module
             pelvis_joint = None
-            spine_module = None
-            for module in self.manager.modules.values():
-                if isinstance(module, SpineModule):
-                    spine_module = module
-                    if "pelvis" in module.joints:
-                        pelvis_joint = module.joints["pelvis"]
-                        break
+            if spine_module and "pelvis" in spine_module.joints:
+                pelvis_joint = spine_module.joints["pelvis"]
 
-            # STEP 3: Connect hips to pelvis (binding joint chain only)
+            # STEP 3: Connect hips to pelvis (binding joint chain and controls)
             if pelvis_joint and cmds.objExists(pelvis_joint):
-                # Find all leg modules
+                # Find all leg modules (both left and right sides)
                 leg_modules = [m for m in self.manager.modules.values() if
                                isinstance(m, LimbModule) and m.limb_type == "leg"]
 
+                print(f"Found {len(leg_modules)} leg modules to connect")
+
                 # Reparent hip joints to pelvis (only main binding joints)
                 for leg_module in leg_modules:
+                    print(f"Processing leg module: {leg_module.module_id} (side: {leg_module.side})")
+
                     if "hip" in leg_module.joints and cmds.objExists(leg_module.joints["hip"]):
                         hip_joint = leg_module.joints["hip"]
                         cmds.parent(hip_joint, pelvis_joint)
@@ -538,189 +542,356 @@ class ModularRigUI(QtWidgets.QDialog):
 
                                 # Parent to the chain group
                                 cmds.parent(root_joint, chain_grp)
-                                print(f"Moved {root_joint} chain to systems group while maintaining hierarchy")
+                                print(f"Moved {root_joint} chain to systems group")
                             except Exception as e:
                                 print(f"Error moving {root_joint}: {str(e)}")
 
             # STEP 4: Find the chest joint and set up connections for arms
             chest_joint = None
-            if spine_module and "chest" in spine_module.joints:
-                chest_joint = spine_module.joints["chest"]
+            chest_control = None
+            if spine_module:
+                if "chest" in spine_module.joints:
+                    chest_joint = spine_module.joints["chest"]
+                if "chest" in spine_module.controls:
+                    chest_control = spine_module.controls["chest"]
+                    print(f"Found chest control: {chest_control}")
 
-                # STEP 4A: Connect arms to chest (binding joint chain only)
-                arm_modules = [m for m in self.manager.modules.values() if
-                               isinstance(m, LimbModule) and m.limb_type == "arm"]
+                # STEP 4A: Connect arms to chest (binding joint chain and controls)
+                if chest_joint and cmds.objExists(chest_joint) and chest_control and cmds.objExists(chest_control):
+                    # Find all arm modules (both left and right sides)
+                    arm_modules = [m for m in self.manager.modules.values() if
+                                   isinstance(m, LimbModule) and m.limb_type == "arm"]
 
-                # Reparent clavicle joints to chest (only main binding joints)
-                for arm_module in arm_modules:
-                    if "clavicle" in arm_module.joints and cmds.objExists(arm_module.joints["clavicle"]):
-                        clavicle_joint = arm_module.joints["clavicle"]
-                        cmds.parent(clavicle_joint, chest_joint)
-                        print(f"Reparented {clavicle_joint} to {chest_joint}")
+                    print(f"Found {len(arm_modules)} arm modules to connect")
 
-                    # Move IK/FK chains to systems group while maintaining hierarchy
-                    # For arms, move the ik_shoulder and fk_shoulder (they bring their children with them)
-                    for prefix in ["ik_", "fk_"]:
-                        root_key = f"{prefix}shoulder"
-                        if root_key in arm_module.joints and cmds.objExists(arm_module.joints[root_key]):
-                            root_joint = arm_module.joints[root_key]
-                            try:
-                                # Create a subgroup for this chain
-                                chain_grp = cmds.group(empty=True, name=f"{arm_module.module_id}_{prefix}chain_grp")
-                                cmds.parent(chain_grp, systems_grp)
+                    # Process each arm module individually for clarity
+                    for arm_module in arm_modules:
+                        print(f"\n=== PROCESSING ARM MODULE: {arm_module.module_id} (side: {arm_module.side}) ===")
 
-                                # Unparent from current parent
-                                current_parent = cmds.listRelatives(root_joint, parent=True)
-                                if current_parent:
-                                    cmds.parent(root_joint, world=True)
+                        # DEBUGGING: Print all controls in the module
+                        print(f"Available controls in {arm_module.module_id}:")
+                        for control_name, control in arm_module.controls.items():
+                            print(f"  {control_name}: {control}")
 
-                                # Parent to the chain group
-                                cmds.parent(root_joint, chain_grp)
-                                print(f"Moved {root_joint} chain to systems group while maintaining hierarchy")
-                            except Exception as e:
-                                print(f"Error moving {root_joint}: {str(e)}")
+                        # 1. CONNECT CLAVICLE JOINT TO CHEST JOINT
+                        if "clavicle" in arm_module.joints and cmds.objExists(arm_module.joints["clavicle"]):
+                            clavicle_joint = arm_module.joints["clavicle"]
 
-                # STEP 5: Connect neck base to chest if it exists
-                if chest_joint:
-                    neck_modules = [m for m in self.manager.modules.values() if isinstance(m, NeckModule)]
+                            # Debug: Check current parent
+                            current_parent = cmds.listRelatives(clavicle_joint, parent=True)
+                            print(f"Clavicle joint {clavicle_joint} current parent: {current_parent}")
 
-                    for neck_module in neck_modules:
-                        # Get the last neck joint for debugging
-                        if hasattr(neck_module, 'debug_joint_orientations'):
-                            neck_module.debug_joint_orientations()
+                            # Parent to chest if not already
+                            if not current_parent or current_parent[0] != chest_joint:
+                                try:
+                                    cmds.parent(clavicle_joint, chest_joint)
+                                    print(f"CONNECTED: Clavicle joint {clavicle_joint} -> chest joint {chest_joint}")
+                                except Exception as e:
+                                    print(f"ERROR parenting clavicle joint: {str(e)}")
+                            else:
+                                print(f"Clavicle joint {clavicle_joint} already connected to chest joint {chest_joint}")
+                        else:
+                            print(f"WARNING: No clavicle joint found for {arm_module.module_id}")
 
-                        # Check if neck_base exists
-                        if "neck_base" not in neck_module.joints:
-                            print(f"Warning: Neck module has no neck_base joint")
-                            continue
+                        # 2. CONNECT CLAVICLE CONTROL TO CHEST CONTROL
+                        if "clavicle" in arm_module.controls:
+                            clavicle_ctrl = arm_module.controls["clavicle"]
+                            clavicle_ctrl_grp = f"{clavicle_ctrl}_grp"
 
-                        # Get neck base joint
-                        neck_base_joint = neck_module.joints["neck_base"]
+                            if cmds.objExists(clavicle_ctrl) and cmds.objExists(clavicle_ctrl_grp):
+                                # Debug: Current parent of the clavicle control group
+                                current_parent = cmds.listRelatives(clavicle_ctrl_grp, parent=True)
+                                print(f"Clavicle control group {clavicle_ctrl_grp} current parent: {current_parent}")
 
-                        # Verify it's not already connected to chest
-                        current_parent = cmds.listRelatives(neck_base_joint, parent=True)
+                                # Parent to chest control if not already
+                                if not current_parent or current_parent[0] != chest_control:
+                                    try:
+                                        cmds.parent(clavicle_ctrl_grp, chest_control)
+                                        print(
+                                            f"CONNECTED: Clavicle control group {clavicle_ctrl_grp} -> chest control {chest_control}")
+                                    except Exception as e:
+                                        print(f"ERROR parenting clavicle control: {str(e)}")
+                                else:
+                                    print(
+                                        f"Clavicle control group {clavicle_ctrl_grp} already parented to chest control {chest_control}")
+                            else:
+                                print(
+                                    f"WARNING: Clavicle control or group not found: {clavicle_ctrl} / {clavicle_ctrl_grp}")
+
+                        # 3. VERIFY AND FIX CONSTRAINTS
+                        if "clavicle" in arm_module.controls and "clavicle" in arm_module.joints:
+                            clavicle_ctrl = arm_module.controls["clavicle"]
+                            clavicle_joint = arm_module.joints["clavicle"]
+
+                            if cmds.objExists(clavicle_ctrl) and cmds.objExists(clavicle_joint):
+                                # Check existing constraints
+                                constraints = cmds.listConnections(clavicle_joint, source=True, type="constraint") or []
+
+                                print(f"Current constraints on {clavicle_joint}: {constraints}")
+
+                                # If no parent constraint found, create one
+                                parent_constraints = cmds.listConnections(clavicle_joint, source=True,
+                                                                          type="parentConstraint") or []
+
+                                if not parent_constraints:
+                                    print(f"No parent constraint found on {clavicle_joint}, creating one...")
+
+                                    # Delete any existing constraints first
+                                    for constraint in constraints:
+                                        if cmds.objExists(constraint):
+                                            try:
+                                                cmds.delete(constraint)
+                                                print(f"Deleted existing constraint: {constraint}")
+                                            except Exception as e:
+                                                print(f"Error deleting constraint {constraint}: {str(e)}")
+
+                                    # Create new parent constraint
+                                    try:
+                                        constraint = \
+                                        cmds.parentConstraint(clavicle_ctrl, clavicle_joint, maintainOffset=True)[0]
+                                        print(
+                                            f"CREATED NEW CONSTRAINT: {constraint} from {clavicle_ctrl} to {clavicle_joint}")
+                                    except Exception as e:
+                                        print(f"ERROR creating parent constraint: {str(e)}")
+                                else:
+                                    # Verify constraint connects the right objects
+                                    for constraint in parent_constraints:
+                                        target_connections = cmds.listConnections(
+                                            f"{constraint}.target[0].targetParentMatrix") or []
+                                        print(f"Constraint {constraint} targets: {target_connections}")
+
+                                        if clavicle_ctrl not in target_connections:
+                                            print(f"WARNING: Constraint {constraint} not connected to {clavicle_ctrl}")
+                                            try:
+                                                cmds.delete(constraint)
+                                                constraint = cmds.parentConstraint(clavicle_ctrl, clavicle_joint,
+                                                                                   maintainOffset=True)[0]
+                                                print(f"RECREATED CONSTRAINT: {constraint}")
+                                            except Exception as e:
+                                                print(f"ERROR fixing constraint: {str(e)}")
+
+                        # 4. CONNECT FK SHOULDER CONTROL TO CLAVICLE CONTROL
+                        if "fk_shoulder" in arm_module.controls and "clavicle" in arm_module.controls:
+                            fk_shoulder_ctrl = arm_module.controls["fk_shoulder"]
+                            fk_shoulder_grp = f"{fk_shoulder_ctrl}_grp"
+                            clavicle_ctrl = arm_module.controls["clavicle"]
+
+                            if cmds.objExists(fk_shoulder_grp) and cmds.objExists(clavicle_ctrl):
+                                # Check current parent
+                                current_parent = cmds.listRelatives(fk_shoulder_grp, parent=True)
+                                print(f"FK shoulder control group {fk_shoulder_grp} current parent: {current_parent}")
+
+                                if not current_parent or current_parent[0] != clavicle_ctrl:
+                                    try:
+                                        cmds.parent(fk_shoulder_grp, clavicle_ctrl)
+                                        print(
+                                            f"CONNECTED: FK shoulder control group {fk_shoulder_grp} -> clavicle control {clavicle_ctrl}")
+                                    except Exception as e:
+                                        print(f"ERROR parenting FK shoulder control: {str(e)}")
+                                else:
+                                    print(
+                                        f"FK shoulder control group {fk_shoulder_grp} already parented to clavicle control {clavicle_ctrl}")
+
+                        # 5. HANDLE IK/FK CHAINS
+                        for prefix in ["ik_", "fk_"]:
+                            root_key = f"{prefix}shoulder"
+                            if root_key in arm_module.joints and cmds.objExists(arm_module.joints[root_key]):
+                                root_joint = arm_module.joints[root_key]
+                                try:
+                                    # Create a subgroup for this chain
+                                    chain_grp = cmds.group(empty=True, name=f"{arm_module.module_id}_{prefix}chain_grp")
+                                    cmds.parent(chain_grp, systems_grp)
+
+                                    # Unparent from current parent
+                                    current_parent = cmds.listRelatives(root_joint, parent=True)
+                                    if current_parent:
+                                        cmds.parent(root_joint, world=True)
+
+                                    # Parent to the chain group
+                                    cmds.parent(root_joint, chain_grp)
+                                    print(f"Moved {root_joint} chain to systems group")
+                                except Exception as e:
+                                    print(f"Error moving {root_joint}: {str(e)}")
+
+                    # STEP 5: Connect neck base to chest
+                    if chest_joint and chest_control:
+                        neck_modules = [m for m in self.manager.modules.values() if isinstance(m, NeckModule)]
+
+                        for neck_module in neck_modules:
+                            # Check if neck_base exists
+                            if "neck_base" not in neck_module.joints:
+                                print(f"Warning: Neck module has no neck_base joint")
+                                continue
+
+                            # Get neck base joint
+                            neck_base_joint = neck_module.joints["neck_base"]
+
+                            # Verify joint is not already connected to chest
+                            current_parent = cmds.listRelatives(neck_base_joint, parent=True)
+                            if current_parent and current_parent[0] == chest_joint:
+                                print(f"Neck base joint {neck_base_joint} already connected to chest {chest_joint}")
+                            else:
+                                # Get all of the neck's children to maintain hierarchy
+                                neck_children = cmds.listRelatives(neck_base_joint, children=True, type="joint") or []
+
+                                # Save original rotation and orientation values
+                                neck_base_orient = cmds.getAttr(f"{neck_base_joint}.jointOrient")[0]
+                                neck_base_rotate = cmds.getAttr(f"{neck_base_joint}.rotate")[0]
+
+                                # Temporarily unparent children if any
+                                for child in neck_children:
+                                    cmds.parent(child, world=True)
+
+                                # Parent neck base to chest
+                                cmds.parent(neck_base_joint, chest_joint)
+                                print(f"Reparented {neck_base_joint} to {chest_joint}")
+
+                                # Make sure the rotation values stay at zero
+                                cmds.setAttr(f"{neck_base_joint}.rotate", 0, 0, 0)
+
+                                # Reparent children back to neck_base
+                                for child in neck_children:
+                                    cmds.parent(child, neck_base_joint)
+                                    print(f"  Restored child {child} to {neck_base_joint}")
+
+                            # Connect neck control to chest control
+                            if "neck_base" in neck_module.controls:
+                                neck_base_ctrl = neck_module.controls["neck_base"]
+                                neck_base_grp = f"{neck_base_ctrl}_grp"
+
+                                if cmds.objExists(neck_base_grp):
+                                    # Check if already connected
+                                    current_parent = cmds.listRelatives(neck_base_grp, parent=True)
+                                    if not current_parent or current_parent[0] != chest_control:
+                                        try:
+                                            cmds.parent(neck_base_grp, chest_control)
+                                            print(
+                                                f"Connected neck base control {neck_base_ctrl} to chest control {chest_control}")
+                                        except Exception as e:
+                                            print(f"Error connecting neck control: {str(e)}")
+
+                # STEP 6: Connect head to neck if both exist
+                head_modules = [m for m in self.manager.modules.values() if isinstance(m, HeadModule)]
+                neck_modules = [m for m in self.manager.modules.values() if isinstance(m, NeckModule)]
+
+                if head_modules and neck_modules:
+                    # Find a head module
+                    head_module = head_modules[0]
+
+                    # Find a neck module
+                    neck_module = neck_modules[0]
+
+                    # Get the last neck joint and control
+                    last_neck_joint = None
+                    last_neck_control = None
+                    last_neck_name = f"neck_{neck_module.num_joints:02d}"
+
+                    if last_neck_name in neck_module.joints:
+                        last_neck_joint = neck_module.joints[last_neck_name]
+
+                    # Find the last neck control (usually "top_neck")
+                    if "top_neck" in neck_module.controls:
+                        last_neck_control = neck_module.controls["top_neck"]
+                        print(f"Found last neck control: {last_neck_control}")
+
+                    # Check if head is already connected to neck
+                    if "head_base" in head_module.joints and last_neck_joint and cmds.objExists(last_neck_joint):
+                        head_base_joint = head_module.joints["head_base"]
+
+                        # Check if already connected
+                        current_parent = cmds.listRelatives(head_base_joint, parent=True)
+                        if current_parent and current_parent[0] == last_neck_joint:
+                            print(f"Head base {head_base_joint} already connected to neck joint {last_neck_joint}")
+                        else:
+                            # Connect only if not already connected
+                            head_end_joint = head_module.joints.get("head_end")
+
+                            # Temporarily unparent head_end if it exists
+                            if head_end_joint and cmds.objExists(head_end_joint):
+                                cmds.parent(head_end_joint, world=True)
+
+                            # Get the orientation of the last neck joint
+                            neck_orient = cmds.getAttr(f"{last_neck_joint}.jointOrient")[0]
+
+                            # Temporarily unparent head base to properly set orientation
+                            cmds.parent(head_base_joint, world=True)
+
+                            # Set head base orientation to match neck (for seamless orientation chain)
+                            cmds.setAttr(f"{head_base_joint}.jointOrient", neck_orient[0], neck_orient[1],
+                                         neck_orient[2])
+                            cmds.setAttr(f"{head_base_joint}.rotate", 0, 0, 0)  # Zero out rotation
+
+                            # Now parent the head_base to the last neck joint
+                            cmds.parent(head_base_joint, last_neck_joint)
+                            print(f"Reparented {head_base_joint} to {last_neck_joint} with matching orientation")
+
+                            # Reparent head_end to head_base
+                            if head_end_joint and cmds.objExists(head_end_joint):
+                                # First make sure head_end is at the guide position
+                                if "head_end" in head_module.guides:
+                                    head_end_pos = cmds.xform(head_module.guides["head_end"], query=True,
+                                                              translation=True, worldSpace=True)
+                                    cmds.xform(head_end_joint, translation=head_end_pos, worldSpace=True)
+
+                                cmds.parent(head_end_joint, head_base_joint)
+                                print(f"Reparented {head_end_joint} to {head_base_joint}")
+
+                                # Ensure head_end has proper orientation
+                                cmds.setAttr(f"{head_end_joint}.jointOrient", 0, 0, 0)  # Zero orientation
+                                cmds.setAttr(f"{head_end_joint}.rotate", 0, 0, 0)  # Zero rotation
+
+                        # Connect head control to last neck control
+                        if "head" in head_module.controls and last_neck_control:
+                            head_ctrl = head_module.controls["head"]
+                            head_ctrl_grp = f"{head_ctrl}_grp"
+
+                            if cmds.objExists(head_ctrl_grp):
+                                # Check if already connected
+                                current_parent = cmds.listRelatives(head_ctrl_grp, parent=True)
+                                if not current_parent or current_parent[0] != last_neck_control:
+                                    try:
+                                        cmds.parent(head_ctrl_grp, last_neck_control)
+                                        print(
+                                            f"Connected head control {head_ctrl} to last neck control {last_neck_control}")
+                                    except Exception as e:
+                                        print(f"Error connecting head control: {str(e)}")
+
+                    # If there's no neck, connect head directly to chest (only if not already connected)
+                    elif "head_base" in head_module.joints and chest_joint and cmds.objExists(chest_joint):
+                        head_base_joint = head_module.joints["head_base"]
+
+                        # Check if already connected
+                        current_parent = cmds.listRelatives(head_base_joint, parent=True)
                         if current_parent and current_parent[0] == chest_joint:
-                            print(f"Neck base {neck_base_joint} already connected to chest {chest_joint}")
-                            continue
+                            print(f"Head base {head_base_joint} already connected to chest joint {chest_joint}")
+                        else:
+                            # Parent head to chest
+                            cmds.parent(head_base_joint, chest_joint)
+                            print(f"Reparented {head_base_joint} directly to {chest_joint} (no neck found)")
 
-                        # Get neck base and chest positions for later orientation fixes
-                        neck_base_pos = cmds.xform(neck_base_joint, query=True, translation=True, worldSpace=True)
-                        chest_pos = cmds.xform(chest_joint, query=True, translation=True, worldSpace=True)
+                        # Also connect head control to chest control if no neck
+                        if "head" in head_module.controls and chest_control:
+                            head_ctrl = head_module.controls["head"]
+                            head_ctrl_grp = f"{head_ctrl}_grp"
 
-                        # Get all of the neck's children to maintain hierarchy
-                        neck_children = cmds.listRelatives(neck_base_joint, children=True, type="joint") or []
+                            if cmds.objExists(head_ctrl_grp):
+                                # Check if already connected
+                                current_parent = cmds.listRelatives(head_ctrl_grp, parent=True)
+                                if not current_parent or current_parent[0] != chest_control:
+                                    try:
+                                        cmds.parent(head_ctrl_grp, chest_control)
+                                        print(
+                                            f"Connected head control {head_ctrl} to chest control {chest_control} (no neck)")
+                                    except Exception as e:
+                                        print(f"Error connecting head control: {str(e)}")
 
-                        # Save original rotation and orientation values
-                        neck_base_orient = cmds.getAttr(f"{neck_base_joint}.jointOrient")[0]
-                        neck_base_rotate = cmds.getAttr(f"{neck_base_joint}.rotate")[0]
+                try:
+                    # STEP 7: Organize clusters
+                    self.manager.organize_clusters()
+                except Exception as e:
+                    print(f"Error organizing clusters: {str(e)}")
 
-                        print(f"Neck base original jointOrient: {neck_base_orient}")
-                        print(f"Neck base original rotate: {neck_base_rotate}")
-
-                        # Temporarily unparent children if any
-                        for child in neck_children:
-                            cmds.parent(child, world=True)
-
-                        # Parent neck base to chest
-                        cmds.parent(neck_base_joint, chest_joint)
-                        print(f"Reparented {neck_base_joint} to {chest_joint}")
-
-                        # Make sure the rotation values stay at zero
-                        cmds.setAttr(f"{neck_base_joint}.rotate", 0, 0, 0)
-
-                        # Reparent children back to neck_base
-                        for child in neck_children:
-                            cmds.parent(child, neck_base_joint)
-                            print(f"  Restored child {child} to {neck_base_joint}")
-
-                        # Debug: verify rotations are still zeroed
-                        neck_base_rotate_after = cmds.getAttr(f"{neck_base_joint}.rotate")[0]
-                        print(f"Neck base rotate after parenting: {neck_base_rotate_after}")
-
-                        # Now debug the neck orientations again to make sure they're correct
-                        if hasattr(neck_module, 'debug_joint_orientations'):
-                            neck_module.debug_joint_orientations()
-
-            # STEP 6: Connect head to neck if both exist and not already connected
-            head_modules = [m for m in self.manager.modules.values() if isinstance(m, HeadModule)]
-            neck_modules = [m for m in self.manager.modules.values() if isinstance(m, NeckModule)]
-
-            if head_modules and neck_modules:
-                # Find a head module
-                head_module = head_modules[0]
-
-                # Find a neck module
-                neck_module = neck_modules[0]
-
-                # Get the last neck joint (to connect head to)
-                last_neck_joint = None
-                last_neck_name = f"neck_{neck_module.num_joints:02d}"
-
-                if last_neck_name in neck_module.joints:
-                    last_neck_joint = neck_module.joints[last_neck_name]
-
-                # Check if head is already connected to neck
-                if "head_base" in head_module.joints and last_neck_joint and cmds.objExists(last_neck_joint):
-                    head_base_joint = head_module.joints["head_base"]
-
-                    # Check if already connected
-                    current_parent = cmds.listRelatives(head_base_joint, parent=True)
-                    if current_parent and current_parent[0] == last_neck_joint:
-                        print(f"Head base {head_base_joint} already connected to neck joint {last_neck_joint}")
-                    else:
-                        # Connect only if not already connected
-                        head_end_joint = head_module.joints.get("head_end")
-
-                        # Temporarily unparent head_end if it exists
-                        if head_end_joint and cmds.objExists(head_end_joint):
-                            cmds.parent(head_end_joint, world=True)
-
-                        # Get the orientation of the last neck joint
-                        neck_orient = cmds.getAttr(f"{last_neck_joint}.jointOrient")[0]
-
-                        # Temporarily unparent head base to properly set orientation
-                        cmds.parent(head_base_joint, world=True)
-
-                        # Set head base orientation to match neck (for seamless orientation chain)
-                        cmds.setAttr(f"{head_base_joint}.jointOrient", neck_orient[0], neck_orient[1], neck_orient[2])
-                        cmds.setAttr(f"{head_base_joint}.rotate", 0, 0, 0)  # Zero out rotation
-
-                        # Now parent the head_base to the last neck joint
-                        cmds.parent(head_base_joint, last_neck_joint)
-                        print(f"Reparented {head_base_joint} to {last_neck_joint} with matching orientation")
-
-                        # Reparent head_end to head_base
-                        if head_end_joint and cmds.objExists(head_end_joint):
-                            # First make sure head_end is at the guide position
-                            if "head_end" in head_module.guides:
-                                head_end_pos = cmds.xform(head_module.guides["head_end"], query=True,
-                                                          translation=True, worldSpace=True)
-                                cmds.xform(head_end_joint, translation=head_end_pos, worldSpace=True)
-
-                            cmds.parent(head_end_joint, head_base_joint)
-                            print(f"Reparented {head_end_joint} to {head_base_joint}")
-
-                            # Ensure head_end has proper orientation
-                            cmds.setAttr(f"{head_end_joint}.jointOrient", 0, 0, 0)  # Zero orientation
-                            cmds.setAttr(f"{head_end_joint}.rotate", 0, 0, 0)  # Zero rotation
-
-                # If there's no neck, connect head directly to chest (only if not already connected)
-                elif "head_base" in head_module.joints and chest_joint and cmds.objExists(chest_joint):
-                    head_base_joint = head_module.joints["head_base"]
-
-                    # Check if already connected
-                    current_parent = cmds.listRelatives(head_base_joint, parent=True)
-                    if current_parent and current_parent[0] == chest_joint:
-                        print(f"Head base {head_base_joint} already connected to chest joint {chest_joint}")
-                    else:
-                        # Parent head to chest
-                        cmds.parent(head_base_joint, chest_joint)
-                        print(f"Reparented {head_base_joint} directly to {chest_joint} (no neck found)")
-
-            # STEP 7: Organize clusters
-            self.manager.organize_clusters()
-
-            QtWidgets.QMessageBox.information(self, "Success", "Root joint created and hierarchy organized.")
+                QtWidgets.QMessageBox.information(self, "Success", "Root joint created and hierarchy organized.")
 
 def show_ui():
     """Show the UI, ensuring only one instance exists."""
