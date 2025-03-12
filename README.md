@@ -1,18 +1,21 @@
-# Modular Auto-Rig System
+# Modular Rig System
 
-[WIP] A modular character rigging system for Maya that streamlines the rigging process through reusable components and a guide-based workflow.
+A modular character rigging system for Maya that streamlines the rigging process through reusable components and a guide-based workflow.
 
 ## Features
 
-- **Modular Design**: Create character rigs from reusable spine and limb components
+- **Modular Design**: Create character rigs from reusable spine, limb, neck, and head components
 - **Guide-Based Workflow**: Position guides on your model and the system builds the rig automatically
 - **IK/FK Switching**: Seamless blending between IK and FK for all limbs
+- **Module Mirroring**: Easily mirror left side components to the right side
+- **Visual Feedback**: Automatic pole vector visualization lines for IK systems
+- **Color-Coding**: Intuitive color system (yellow for center, blue for left, red for right)
 - **Intuitive UI**: User-friendly interface for rig creation and customization
 - **Extensible Architecture**: Built for easy addition of new component types
 
 ## Overview
 
-This repository contains the codebase for a Maya auto-rigging tool that I developed as part of my technical rigging portfolio. The tool demonstrates:
+This repository contains the codebase for a Maya auto-rigging tool that demonstrates:
 
 - Python programming for Maya rigging automation
 - Object-oriented design for modular rig components
@@ -25,11 +28,15 @@ This repository contains the codebase for a Maya auto-rigging tool that I develo
 autorig/
 ├── core/           # Core functionality
 │   ├── utils.py    # Utility functions
+│   ├── joint_utils.py # Joint orientation utilities
+│   ├── vector_utils.py # Vector math operations
 │   ├── module_base.py # Base module class
 │   └── manager.py  # Module manager
 ├── modules/        # Module implementations
 │   ├── spine.py    # Spine module
-│   └── limb.py     # Limb module (arms & legs)
+│   ├── limb.py     # Limb module (arms & legs)
+│   ├── neck.py     # Neck module 
+│   └── head.py     # Head module
 └── ui/             # User interface
     └── main_ui.py  # UI implementation
 ```
@@ -37,33 +44,18 @@ autorig/
 ## Documentation
 
 - [User Guide](docs/USER_GUIDE.md) - Detailed instructions for using the system
+- [Development Notes](docs/DEVELOPMENT_NOTES.md) - Technical details for extending the system
 
-## Development Process
+## In Development
 
-This tool was developed over a 3-week period as a demonstration of rigging automation principles. The development phases included:
+The following features are planned for future development:
 
-1. Core architecture design
-2. Implementation of base module system
-3. Development of specialized rig modules (spine, limbs)
-4. UI development
-5. Testing and refinement
-
-## Technical Highlights
-
-- **Modular Architecture**: Each rig component is a self-contained module
-- **Guide-Based System**: Uses guide objects for intuitive rig placement
-- **IK/FK Blending**: Seamless switching between animation techniques
-- **UI Integration**: Clean UI implementation using PySide2/Qt
-
-## Roadmap
-
-This is a demonstration project, but future developments could include:
-
-- Additional module types (fingers, facial controls)
-- Enhanced joint orientation system
-- Stretchy IK systems
-- Space switching capabilities
-- Control shape library expansion
+- **FK/IK Matching**: Seamlessly switch between FK and IK without animation loss
+- **Space Switching**: Add multiple parent spaces for controls
+- **Stretchy IK Systems**: Create elasticity for limbs and spine
+- **Custom Control Colors**: User-defined color schemes for controls
+- **Control Shape Library**: Additional control shapes for varied aesthetics
+- **Control Shape Swapping**: Change control shapes while preserving constraints and connections
 
 ## About Me
 
