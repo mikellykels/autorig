@@ -524,6 +524,39 @@ class ModularRigUI(QtWidgets.QDialog):
                         cmds.parent(hip_joint, pelvis_joint)
                         print(f"Reparented {hip_joint} to {pelvis_joint}")
 
+                    # Move IK/FK chains to systems group with constraints
+                    for prefix in ["ik_", "fk_"]:
+                        root_key = f"{prefix}hip"
+                        if root_key in leg_module.joints and cmds.objExists(leg_module.joints[root_key]):
+                            root_joint = leg_module.joints[root_key]
+                            try:
+                                # Create a subgroup for this chain
+                                chain_grp = cmds.group(empty=True, name=f"{leg_module.module_id}_{prefix}chain_grp")
+                                cmds.parent(chain_grp, systems_grp)
+
+                                # Get current parent
+                                current_parent = cmds.listRelatives(root_joint, parent=True)
+
+                                # Create constraint to pelvis before unparenting
+                                # This ensures the IK/FK chains still follow the pelvis
+                                if prefix == "ik_":
+                                    constraint_name = f"{root_joint}_to_pelvis_parentConstraint"
+                                    if not cmds.objExists(constraint_name):
+                                        cmds.parentConstraint(pelvis_joint, root_joint, maintainOffset=True,
+                                                              name=constraint_name)
+                                        print(f"Created parent constraint from {pelvis_joint} to {root_joint}")
+
+                                # Unparent from current parent
+                                if current_parent:
+                                    cmds.parent(root_joint, world=True)
+
+                                # Parent to the chain group
+                                cmds.parent(root_joint, chain_grp)
+                                print(f"Moved {root_joint} chain to systems group")
+
+                            except Exception as e:
+                                print(f"Warning: Error moving {root_joint}: {str(e)}")
+
                 # STEP 4: Find the chest joint and set up connections for arms
                 chest_joint = None
                 chest_control = None
@@ -601,7 +634,7 @@ class ModularRigUI(QtWidgets.QDialog):
                                         print(
                                             f"Clavicle control group {clavicle_ctrl_grp} already parented to chest control {chest_control}")
 
-                            # 3. CONNECT FK SHOULDER CONTROL TO CLAVICLE CONTROL - this is key for right arm working properly
+                            # 3. CONNECT FK SHOULDER CONTROL TO CLAVICLE CONTROL - this is key for arm movement
                             if "fk_shoulder" in arm_module.controls and "clavicle" in arm_module.controls:
                                 fk_shoulder_ctrl = arm_module.controls["fk_shoulder"]
                                 fk_shoulder_grp = f"{fk_shoulder_ctrl}_grp"
@@ -621,7 +654,7 @@ class ModularRigUI(QtWidgets.QDialog):
                                         print(
                                             f"FK shoulder control group {fk_shoulder_grp} already parented to clavicle control {clavicle_ctrl}")
 
-                            # 4. VERIFY AND RECREATE CONSTRAINTS IF NEEDED - key for left arm
+                            # 4. VERIFY AND RECREATE CLAVICLE CONSTRAINTS IF NEEDED
                             if "clavicle" in arm_module.controls and "clavicle" in arm_module.joints:
                                 clavicle_ctrl = arm_module.controls["clavicle"]
                                 clavicle_joint = arm_module.joints["clavicle"]
@@ -635,6 +668,57 @@ class ModularRigUI(QtWidgets.QDialog):
                                         print(f"No parent constraint found on {clavicle_joint}, creating one...")
                                         cmds.parentConstraint(clavicle_ctrl, clavicle_joint, maintainOffset=True)
                                         print(f"Created new constraint from {clavicle_ctrl} to {clavicle_joint}")
+
+                            # 5. MOVE IK/FK CHAINS TO SYSTEMS GROUP WITH PROPER CONSTRAINTS TO CLAVICLE
+                            for prefix in ["ik_", "fk_"]:
+                                root_key = f"{prefix}shoulder"
+                                if root_key in arm_module.joints and cmds.objExists(arm_module.joints[root_key]):
+                                    root_joint = arm_module.joints[root_key]
+                                    try:
+                                        # Create a subgroup for this chain
+                                        chain_grp = cmds.group(empty=True,
+                                                               name=f"{arm_module.module_id}_{prefix}chain_grp")
+                                        cmds.parent(chain_grp, systems_grp)
+
+                                        # Get current parent before unparenting
+                                        current_parent = cmds.listRelatives(root_joint, parent=True)
+
+                                        # CRITICAL FIX: Create constraint to clavicle BEFORE unparenting
+                                        # This ensures the IK shoulder still follows the clavicle even after moving
+                                        if prefix == "ik_" and "clavicle" in arm_module.joints:
+                                            constraint_name = f"{root_joint}_to_clavicle_parentConstraint"
+                                            if not cmds.objExists(constraint_name):
+                                                cmds.parentConstraint(
+                                                    arm_module.joints["clavicle"],
+                                                    root_joint,
+                                                    maintainOffset=True,
+                                                    name=constraint_name
+                                                )
+                                                print(f"Created parent constraint from clavicle to {root_joint}")
+
+                                        # Unparent from current parent
+                                        if current_parent:
+                                            cmds.parent(root_joint, world=True)
+
+                                        # Parent to the chain group
+                                        cmds.parent(root_joint, chain_grp)
+                                        print(f"Moved {root_joint} chain to systems group")
+
+                                        # Verify constraint is still working after reparenting
+                                        constraints = cmds.listConnections(root_joint, source=True,
+                                                                           type="parentConstraint") or []
+                                        if prefix == "ik_" and not constraints:
+                                            print(f"Warning: Constraint was lost, recreating for {root_joint}")
+                                            if "clavicle" in arm_module.joints:
+                                                cmds.parentConstraint(
+                                                    arm_module.joints["clavicle"],
+                                                    root_joint,
+                                                    maintainOffset=True
+                                                )
+                                                print(f"Recreated parent constraint from clavicle to {root_joint}")
+
+                                    except Exception as e:
+                                        print(f"Warning: Error moving {root_joint}: {str(e)}")
 
                         # STEP 5: Connect neck base to chest
                         if chest_joint and chest_control:
@@ -821,6 +905,12 @@ class ModularRigUI(QtWidgets.QDialog):
                                     print(f"Created new constraint from {fk_ctrl} to {fk_joint}")
                                 except Exception as e:
                                     print(f"Error creating constraint: {str(e)}")
+
+                    try:
+                        # STEP 8: Organize clusters
+                        self.manager.organize_clusters()
+                    except Exception as e:
+                        print(f"Warning: Error organizing clusters: {str(e)}")
 
                     QtWidgets.QMessageBox.information(self, "Success", "Root joint created and hierarchy organized.")
 
