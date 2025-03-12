@@ -1,5 +1,5 @@
 """
-Modular Auto-Rig System
+Modular Rig System
 Limb Module (Refactored)
 
 This module contains the implementation of the limb rig module (arms and legs).

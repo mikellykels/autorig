@@ -1,5 +1,5 @@
 """
-Modular Auto-Rig System
+Modular Rig System
 Base Module Class (Refactored)
 
 This module contains the abstract base class for rig modules.

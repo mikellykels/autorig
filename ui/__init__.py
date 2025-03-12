@@ -1,8 +1,8 @@
 """
-Modular Auto-Rig System
+Modular Rig System
 UI package initialization
 
-This package contains the UI components for the auto-rigging system.
+This package contains the UI components for the modular rigging system.
 
 Author: Mikaela Carino
 Date: 2025

@@ -1,5 +1,5 @@
 """
-Modular Auto-Rig System
+Modular Rig System
 Module Manager
 
 This module contains the ModuleManager class which manages rig modules.

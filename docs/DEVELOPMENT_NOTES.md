@@ -18,7 +18,7 @@ BaseModule (Abstract)
 
 ### ModuleManager
 
-The `ModuleManager` class serves as the central coordinator for the auto-rigging system:
+The `ModuleManager` class serves as the central coordinator for the modular rigging system:
 
 - Maintains references to all modules
 - Creates the main rig structure (guides, joints, controls groups)

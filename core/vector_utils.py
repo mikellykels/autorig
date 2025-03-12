@@ -1,5 +1,5 @@
 """
-Modular Auto-Rig System
+Modular Rig System
 Vector Math Utilities
 
 This module provides vector math operations without requiring numpy.

@@ -1,8 +1,8 @@
 """
-Modular Auto-Rig System
+Modular Rig System
 UI Implementation
 
-This module contains the UI for the modular auto-rigging system.
+This module contains the UI for the Modular Rig Systemging system.
 
 Author: Mikaela Carino
 Date: 2025
@@ -30,13 +30,13 @@ def maya_main_window():
 
 class ModularRigUI(QtWidgets.QDialog):
     """
-    UI for the modular auto-rigging system.
+    UI for the Modular Rig Systemging system.
     """
 
     def __init__(self, parent=maya_main_window()):
         super(ModularRigUI, self).__init__(parent)
 
-        self.setWindowTitle("Modular Auto-Rig")
+        self.setWindowTitle("Modular Rig System")
         self.setMinimumWidth(400)
         self.setWindowFlags(self.windowFlags() ^ QtCore.Qt.WindowContextHelpButtonHint)
 
@@ -483,6 +483,70 @@ class ModularRigUI(QtWidgets.QDialog):
             cmds.select(joints_grp)  # Select the joints group first
             root_joint = cmds.joint(name=root_joint_name, position=(0, 0, 0))
             print(f"Created {root_joint} under {joints_grp}")
+
+            # Create the root control
+            # Standard purple color: RGB(128, 0, 128)
+            root_ctrl_name = f"{self.manager.character_name}_root_ctrl"
+            root_ctrl = cmds.circle(
+                name=root_ctrl_name,
+                normal=[0, 1, 0],  # Y-up orientation
+                radius=30.0  # Larger size for visibility
+            )[0]
+
+            # Color the control purple
+            shape = cmds.listRelatives(root_ctrl, shapes=True)[0]
+            cmds.setAttr(f"{shape}.overrideEnabled", 1)
+            cmds.setAttr(f"{shape}.overrideRGBColors", 1)
+            cmds.setAttr(f"{shape}.overrideColorR", 0.5)  # Red component
+            cmds.setAttr(f"{shape}.overrideColorG", 0.0)  # Green component
+            cmds.setAttr(f"{shape}.overrideColorB", 0.5)  # Blue component
+
+            # Create control group
+            root_ctrl_grp = cmds.group(root_ctrl, name=f"{root_ctrl_name}_grp")
+
+            # Position the control at the root joint
+            cmds.delete(cmds.parentConstraint(root_joint, root_ctrl_grp, maintainOffset=False))
+
+            # Parent the control group to the control group
+            cmds.parent(root_ctrl_grp, self.manager.controls_grp)
+
+            # Parent the root joint to the root control
+            # First, create a parentConstraint to match positions
+            root_constraint = cmds.parentConstraint(
+                root_ctrl,
+                root_joint,
+                maintainOffset=True
+            )[0]
+
+            # Find top-level controls (direct children of the control group)
+            top_level_controls = []
+            control_children = cmds.listRelatives(self.manager.controls_grp, children=True, type="transform") or []
+
+            # Exclude the root control and its group
+            control_children = [ctrl for ctrl in control_children if
+                                ctrl != root_ctrl_grp and not ctrl.startswith(root_ctrl_name)]
+
+            print("\nFound top-level controls:")
+            for ctrl in control_children:
+                print(f"  {ctrl}")
+                try:
+                    # Unparent from control group first
+                    cmds.parent(ctrl, world=True)
+
+                    # Parent to root control
+                    cmds.parent(ctrl, root_ctrl)
+                    print(f"  Parented {ctrl} to root control")
+                except Exception as e:
+                    print(f"  Error parenting {ctrl}: {str(e)}")
+
+            try:
+                # Organize clusters
+                self.manager.organize_clusters()
+            except Exception as e:
+                print(f"Warning: Error organizing clusters: {str(e)}")
+
+            QtWidgets.QMessageBox.information(self, "Success",
+                                              "Root joint and control created. All controls parented to root control.")
 
             # Create a rig systems group for IK/FK chains
             systems_grp_name = f"{self.manager.character_name}_rig_systems"
@@ -1045,7 +1109,7 @@ def show_ui():
     dialog = ModularRigUI()
     dialog.setObjectName(window_name)
     dialog.setWindowFlags(dialog.windowFlags() | QtCore.Qt.Window)
-    dialog.setWindowTitle("Modular Auto-Rig")
+    dialog.setWindowTitle("Modular Rig System")
     dialog.show()
 
     return dialog

@@ -1,5 +1,5 @@
 """
-Modular Auto-Rig System
+Modular Rig System
 Spine Module (Refactored)
 
 This module contains the implementation of the spine rig module.

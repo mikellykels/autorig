@@ -1,8 +1,8 @@
 """
-Modular Auto-Rig System
+Modular Rig System
 Main package initialization
 
-This package contains a modular auto-rigging system for Maya.
+This package contains a Modular Rig Systemging system for Maya.
 
 Author: Mikaela Carino
 Date: 2025

@@ -1,5 +1,5 @@
 """
-Modular Auto-Rig System
+Modular Rig System
 Neck Module
 
 This module contains the implementation of the neck rig module.

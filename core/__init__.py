@@ -1,8 +1,8 @@
 """
-Modular Auto-Rig System
+Modular Rig System
 Core package initialization
 
-This package contains the core components of the auto-rigging system.
+This package contains the core components of the modular rigging system.
 
 Author: Mikaela Carino
 Date: 2025

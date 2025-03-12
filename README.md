@@ -15,7 +15,7 @@ A modular character rigging system for Maya that streamlines the rigging process
 
 ## Overview
 
-This repository contains the codebase for a Maya auto-rigging tool that demonstrates:
+This repository contains the codebase for a Maya modular rigging tool that demonstrates:
 
 - Python programming for Maya rigging automation
 - Object-oriented design for modular rig components

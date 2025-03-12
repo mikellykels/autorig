@@ -1,5 +1,5 @@
 """
-Modular Auto-Rig System
+Modular Rig System
 Head Module
 
 This module contains the implementation of the head rig module.

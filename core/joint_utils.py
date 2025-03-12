@@ -1,5 +1,5 @@
 """
-Modular Auto-Rig System
+Modular Rig System
 Joint Utilities
 
 This module contains specialized utilities for joint creation, orientation,

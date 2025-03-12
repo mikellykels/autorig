@@ -1,8 +1,8 @@
 """
-Modular Auto-Rig System
+Modular Rig System
 Utility Functions (Refactored)
 
-This module contains utility functions for the auto-rigging system.
+This module contains utility functions for the modular rigging system.
 Improved with better control shapes and guide creation.
 
 Author: Mikaela Carino

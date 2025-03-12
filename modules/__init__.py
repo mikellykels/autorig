@@ -1,8 +1,8 @@
 """
-Modular Auto-Rig System
+Modular Rig System
 Modules package initialization
 
-This package contains the module implementations for the auto-rigging system.
+This package contains the module implementations for the modular rigging system.
 
 Author: Mikaela Carino
 Date: 2025
