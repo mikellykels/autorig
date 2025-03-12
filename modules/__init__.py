@@ -10,3 +10,5 @@ Date: 2025
 
 from autorig.modules.spine import SpineModule
 from autorig.modules.limb import LimbModule
+from autorig.modules.neck import NeckModule
+from autorig.modules.head import HeadModule

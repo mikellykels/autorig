@@ -18,6 +18,8 @@ from autorig.core.manager import ModuleManager
 from autorig.core.utils import CONTROL_COLORS
 from autorig.modules.spine import SpineModule
 from autorig.modules.limb import LimbModule
+from autorig.modules.neck import NeckModule
+from autorig.modules.head import HeadModule
 
 
 def maya_main_window():
@@ -54,7 +56,7 @@ class ModularRigUI(QtWidgets.QDialog):
         # Module Management section
         self.module_type_label = QtWidgets.QLabel("Module Type:")
         self.module_type_combo = QtWidgets.QComboBox()
-        self.module_type_combo.addItems(["Spine", "Arm", "Leg"])
+        self.module_type_combo.addItems(["Spine", "Arm", "Leg", "Neck", "Head"])
 
         self.module_side_label = QtWidgets.QLabel("Side:")
         self.module_side_combo = QtWidgets.QComboBox()
@@ -97,10 +99,32 @@ class ModularRigUI(QtWidgets.QDialog):
         limb_settings_layout.addWidget(self.limb_type_combo)
         self.limb_settings_widget.setLayout(limb_settings_layout)
 
+        # Neck settings
+        self.neck_settings_widget = QtWidgets.QWidget()
+        self.neck_joints_label = QtWidgets.QLabel("Number of Neck Joints:")
+        self.neck_joints_spinner = QtWidgets.QSpinBox()
+        self.neck_joints_spinner.setRange(1, 5)
+        self.neck_joints_spinner.setValue(3)
+
+        neck_settings_layout = QtWidgets.QHBoxLayout()
+        neck_settings_layout.addWidget(self.neck_joints_label)
+        neck_settings_layout.addWidget(self.neck_joints_spinner)
+        self.neck_settings_widget.setLayout(neck_settings_layout)
+
+        # Head settings (empty for now)
+        self.head_settings_widget = QtWidgets.QWidget()
+        self.head_settings_label = QtWidgets.QLabel("No settings needed for head module")
+
+        head_settings_layout = QtWidgets.QHBoxLayout()
+        head_settings_layout.addWidget(self.head_settings_label)
+        self.head_settings_widget.setLayout(head_settings_layout)
+
         # Stacked widget to switch between module settings
         self.settings_stack = QtWidgets.QStackedWidget()
-        self.settings_stack.addWidget(self.spine_settings_widget)
-        self.settings_stack.addWidget(self.limb_settings_widget)
+        self.settings_stack.addWidget(self.spine_settings_widget)  # 0 - Spine
+        self.settings_stack.addWidget(self.limb_settings_widget)  # 1 - Limb (Arm/Leg)
+        self.settings_stack.addWidget(self.neck_settings_widget)  # 2 - Neck
+        self.settings_stack.addWidget(self.head_settings_widget)  # 3 - Head
 
         # Module List section
         self.module_list_label = QtWidgets.QLabel("Added Modules:")
@@ -206,13 +230,16 @@ class ModularRigUI(QtWidgets.QDialog):
 
     def update_settings_stack(self, index):
         """Update the settings stack widget based on the selected module type."""
-        self.settings_stack.setCurrentIndex(0 if index == 0 else 1)  # Spine or Limb
-
-        # Update limb type combo box visibility
-        if index == 1:  # Arm
-            self.limb_type_combo.setCurrentIndex(0)  # Arm
-        elif index == 2:  # Leg
-            self.limb_type_combo.setCurrentIndex(1)  # Leg
+        if index == 0:  # Spine
+            self.settings_stack.setCurrentIndex(0)
+        elif index in [1, 2]:  # Arm or Leg
+            self.settings_stack.setCurrentIndex(1)
+            # Update limb type combo box based on selection
+            self.limb_type_combo.setCurrentIndex(0 if index == 1 else 1)  # Arm or Leg
+        elif index == 3:  # Neck
+            self.settings_stack.setCurrentIndex(2)
+        elif index == 4:  # Head
+            self.settings_stack.setCurrentIndex(3)
 
     def update_module_name(self):
         """Update the module name field based on the selected type and side."""
@@ -279,6 +306,11 @@ class ModularRigUI(QtWidgets.QDialog):
         elif module_type in ["Arm", "Leg"]:
             limb_type = self.limb_type_combo.currentText().lower()
             module = LimbModule(side, module_name, limb_type)
+        elif module_type == "Neck":
+            num_joints = self.neck_joints_spinner.value()
+            module = NeckModule(side, module_name, num_joints)
+        elif module_type == "Head":
+            module = HeadModule(side, module_name)
 
         if module:
             # Register the module
@@ -510,9 +542,12 @@ class ModularRigUI(QtWidgets.QDialog):
                             except Exception as e:
                                 print(f"Error moving {root_joint}: {str(e)}")
 
-            # STEP 4: Connect arms to chest (binding joint chain only)
+            # STEP 4: Find the chest joint and set up connections for arms
+            chest_joint = None
             if spine_module and "chest" in spine_module.joints:
                 chest_joint = spine_module.joints["chest"]
+
+                # STEP 4A: Connect arms to chest (binding joint chain only)
                 arm_modules = [m for m in self.manager.modules.values() if
                                isinstance(m, LimbModule) and m.limb_type == "arm"]
 
@@ -545,7 +580,144 @@ class ModularRigUI(QtWidgets.QDialog):
                             except Exception as e:
                                 print(f"Error moving {root_joint}: {str(e)}")
 
-            # STEP 5: Organize clusters
+                # STEP 5: Connect neck base to chest if it exists
+                if chest_joint:
+                    neck_modules = [m for m in self.manager.modules.values() if isinstance(m, NeckModule)]
+
+                    for neck_module in neck_modules:
+                        # Get the last neck joint for debugging
+                        if hasattr(neck_module, 'debug_joint_orientations'):
+                            neck_module.debug_joint_orientations()
+
+                        # Check if neck_base exists
+                        if "neck_base" not in neck_module.joints:
+                            print(f"Warning: Neck module has no neck_base joint")
+                            continue
+
+                        # Get neck base joint
+                        neck_base_joint = neck_module.joints["neck_base"]
+
+                        # Verify it's not already connected to chest
+                        current_parent = cmds.listRelatives(neck_base_joint, parent=True)
+                        if current_parent and current_parent[0] == chest_joint:
+                            print(f"Neck base {neck_base_joint} already connected to chest {chest_joint}")
+                            continue
+
+                        # Get neck base and chest positions for later orientation fixes
+                        neck_base_pos = cmds.xform(neck_base_joint, query=True, translation=True, worldSpace=True)
+                        chest_pos = cmds.xform(chest_joint, query=True, translation=True, worldSpace=True)
+
+                        # Get all of the neck's children to maintain hierarchy
+                        neck_children = cmds.listRelatives(neck_base_joint, children=True, type="joint") or []
+
+                        # Save original rotation and orientation values
+                        neck_base_orient = cmds.getAttr(f"{neck_base_joint}.jointOrient")[0]
+                        neck_base_rotate = cmds.getAttr(f"{neck_base_joint}.rotate")[0]
+
+                        print(f"Neck base original jointOrient: {neck_base_orient}")
+                        print(f"Neck base original rotate: {neck_base_rotate}")
+
+                        # Temporarily unparent children if any
+                        for child in neck_children:
+                            cmds.parent(child, world=True)
+
+                        # Parent neck base to chest
+                        cmds.parent(neck_base_joint, chest_joint)
+                        print(f"Reparented {neck_base_joint} to {chest_joint}")
+
+                        # Make sure the rotation values stay at zero
+                        cmds.setAttr(f"{neck_base_joint}.rotate", 0, 0, 0)
+
+                        # Reparent children back to neck_base
+                        for child in neck_children:
+                            cmds.parent(child, neck_base_joint)
+                            print(f"  Restored child {child} to {neck_base_joint}")
+
+                        # Debug: verify rotations are still zeroed
+                        neck_base_rotate_after = cmds.getAttr(f"{neck_base_joint}.rotate")[0]
+                        print(f"Neck base rotate after parenting: {neck_base_rotate_after}")
+
+                        # Now debug the neck orientations again to make sure they're correct
+                        if hasattr(neck_module, 'debug_joint_orientations'):
+                            neck_module.debug_joint_orientations()
+
+            # STEP 6: Connect head to neck if both exist and not already connected
+            head_modules = [m for m in self.manager.modules.values() if isinstance(m, HeadModule)]
+            neck_modules = [m for m in self.manager.modules.values() if isinstance(m, NeckModule)]
+
+            if head_modules and neck_modules:
+                # Find a head module
+                head_module = head_modules[0]
+
+                # Find a neck module
+                neck_module = neck_modules[0]
+
+                # Get the last neck joint (to connect head to)
+                last_neck_joint = None
+                last_neck_name = f"neck_{neck_module.num_joints:02d}"
+
+                if last_neck_name in neck_module.joints:
+                    last_neck_joint = neck_module.joints[last_neck_name]
+
+                # Check if head is already connected to neck
+                if "head_base" in head_module.joints and last_neck_joint and cmds.objExists(last_neck_joint):
+                    head_base_joint = head_module.joints["head_base"]
+
+                    # Check if already connected
+                    current_parent = cmds.listRelatives(head_base_joint, parent=True)
+                    if current_parent and current_parent[0] == last_neck_joint:
+                        print(f"Head base {head_base_joint} already connected to neck joint {last_neck_joint}")
+                    else:
+                        # Connect only if not already connected
+                        head_end_joint = head_module.joints.get("head_end")
+
+                        # Temporarily unparent head_end if it exists
+                        if head_end_joint and cmds.objExists(head_end_joint):
+                            cmds.parent(head_end_joint, world=True)
+
+                        # Get the orientation of the last neck joint
+                        neck_orient = cmds.getAttr(f"{last_neck_joint}.jointOrient")[0]
+
+                        # Temporarily unparent head base to properly set orientation
+                        cmds.parent(head_base_joint, world=True)
+
+                        # Set head base orientation to match neck (for seamless orientation chain)
+                        cmds.setAttr(f"{head_base_joint}.jointOrient", neck_orient[0], neck_orient[1], neck_orient[2])
+                        cmds.setAttr(f"{head_base_joint}.rotate", 0, 0, 0)  # Zero out rotation
+
+                        # Now parent the head_base to the last neck joint
+                        cmds.parent(head_base_joint, last_neck_joint)
+                        print(f"Reparented {head_base_joint} to {last_neck_joint} with matching orientation")
+
+                        # Reparent head_end to head_base
+                        if head_end_joint and cmds.objExists(head_end_joint):
+                            # First make sure head_end is at the guide position
+                            if "head_end" in head_module.guides:
+                                head_end_pos = cmds.xform(head_module.guides["head_end"], query=True,
+                                                          translation=True, worldSpace=True)
+                                cmds.xform(head_end_joint, translation=head_end_pos, worldSpace=True)
+
+                            cmds.parent(head_end_joint, head_base_joint)
+                            print(f"Reparented {head_end_joint} to {head_base_joint}")
+
+                            # Ensure head_end has proper orientation
+                            cmds.setAttr(f"{head_end_joint}.jointOrient", 0, 0, 0)  # Zero orientation
+                            cmds.setAttr(f"{head_end_joint}.rotate", 0, 0, 0)  # Zero rotation
+
+                # If there's no neck, connect head directly to chest (only if not already connected)
+                elif "head_base" in head_module.joints and chest_joint and cmds.objExists(chest_joint):
+                    head_base_joint = head_module.joints["head_base"]
+
+                    # Check if already connected
+                    current_parent = cmds.listRelatives(head_base_joint, parent=True)
+                    if current_parent and current_parent[0] == chest_joint:
+                        print(f"Head base {head_base_joint} already connected to chest joint {chest_joint}")
+                    else:
+                        # Parent head to chest
+                        cmds.parent(head_base_joint, chest_joint)
+                        print(f"Reparented {head_base_joint} directly to {chest_joint} (no neck found)")
+
+            # STEP 7: Organize clusters
             self.manager.organize_clusters()
 
             QtWidgets.QMessageBox.information(self, "Success", "Root joint created and hierarchy organized.")
