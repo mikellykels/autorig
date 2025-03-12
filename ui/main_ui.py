@@ -148,6 +148,11 @@ class ModularRigUI(QtWidgets.QDialog):
         self.add_root_button.setEnabled(False)
         self.add_root_button.setStyleSheet("background-color: #FFA500; color: white; font-weight: bold;")
 
+        # Add Cleanup button in the build controls section
+        self.cleanup_button = QtWidgets.QPushButton("Cleanup Scene")
+        self.cleanup_button.setStyleSheet("background-color: #FFC300; color: black; font-weight: bold;")
+        self.cleanup_button.setEnabled(False)  # Initially disabled until rig is initialized
+
     def create_layouts(self):
         """Create the UI layouts."""
         main_layout = QtWidgets.QVBoxLayout(self)
@@ -200,6 +205,8 @@ class ModularRigUI(QtWidgets.QDialog):
         build_layout.addWidget(self.build_rig_button)
 
         build_layout.addWidget(self.add_root_button)
+        # Add cleanup button to the build layout
+        build_layout.addWidget(self.cleanup_button)
 
         build_group.setLayout(build_layout)
 
@@ -227,6 +234,11 @@ class ModularRigUI(QtWidgets.QDialog):
         self.module_side_combo.currentIndexChanged.connect(self.update_module_name)
 
         self.add_root_button.clicked.connect(self.add_root_joint)
+
+        # Connect cleanup button
+        self.cleanup_button.clicked.connect(self.cleanup_scene)
+        # Enable cleanup button when rig is initialized
+        self.init_button.clicked.connect(lambda: self.cleanup_button.setEnabled(True))
 
     def update_settings_stack(self, index):
         """Update the settings stack widget based on the selected module type."""
@@ -936,6 +948,91 @@ class ModularRigUI(QtWidgets.QDialog):
                         print(f"Warning: Error organizing clusters: {str(e)}")
 
                     QtWidgets.QMessageBox.information(self, "Success", "Root joint created and hierarchy organized.")
+
+    def cleanup_scene(self):
+        """
+        Perform a comprehensive scene cleanup.
+        Removes empty groups, unnecessary nodes, and helps organize the Maya scene.
+        """
+        # Confirm with user
+        result = QtWidgets.QMessageBox.question(
+            self,
+            "Cleanup Scene",
+            "This will remove empty groups and help organize the scene. Continue?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No
+        )
+
+        if result == QtWidgets.QMessageBox.Yes:
+            # 1. Remove Empty Groups
+            empty_groups = self._find_empty_nulls()
+            delete_count = self._delete_empty_nulls(empty_groups)
+
+            # Show results
+            QtWidgets.QMessageBox.information(
+                self,
+                "Cleanup Complete",
+                f"Cleanup Results:\n"
+                f"- Removed {delete_count} empty groups\n"
+            )
+
+    def _find_empty_nulls(self):
+        """
+        Finds empty null transform nodes in the scene.
+
+        Returns:
+            list: Names of empty null transform nodes
+        """
+        # Get all transform nodes
+        nulls = cmds.ls(type='transform')
+
+        # List to store empty nulls
+        empty_nulls = []
+
+        for null in nulls:
+            # Skip if node doesn't exist
+            if not cmds.objExists(null):
+                continue
+
+            # Check if the node has no children and is a transform
+            if not cmds.listRelatives(null, children=True) and cmds.nodeType(null) == 'transform':
+                # Exclude Maya's default objects and groups
+                if null.startswith("|"):
+                    continue
+
+                # Exclude specific Maya system groups
+                if any(reserved in null for reserved in [
+                    "persp", "top", "front", "side",
+                    "defaultLayer", "LayerManager"
+                ]):
+                    continue
+
+                empty_nulls.append(null)
+
+        return empty_nulls
+
+    def _delete_empty_nulls(self, nulls_to_delete):
+        """
+        Delete the list of empty null transform nodes.
+
+        Args:
+            nulls_to_delete (list): List of null node names to delete
+
+        Returns:
+            int: Number of nulls deleted
+        """
+        delete_count = 0
+        for null in nulls_to_delete:
+            try:
+                if cmds.objExists(null):
+                    # Final check to ensure it's still an empty transform
+                    if not cmds.listRelatives(null, children=True) and cmds.nodeType(null) == 'transform':
+                        cmds.delete(null)
+                        delete_count += 1
+                        print(f"Deleted empty null: {null}")
+            except Exception as e:
+                print(f"Error deleting null {null}: {str(e)}")
+
+        return delete_count
 
 def show_ui():
     """Show the UI, ensuring only one instance exists."""
