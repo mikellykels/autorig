@@ -403,7 +403,7 @@ class NeckModule(BaseModule):
         ctrl, ctrl_grp = create_control(
             f"{self.module_id}_neck_base_ctrl",
             "circle",
-            6.0,  # Size
+            8.0,  # Size
             CONTROL_COLORS["main"],  # Yellow
             normal=[1, 0, 0]  # X axis normal for proper orientation
         )
@@ -431,7 +431,7 @@ class NeckModule(BaseModule):
         ctrl, ctrl_grp = create_control(
             f"{self.module_id}_mid_neck_ctrl",
             "circle",
-            5.0,  # Size (smaller than neck base)
+            7.0,  # Size (smaller than neck base)
             CONTROL_COLORS["main"],  # Yellow
             normal=[1, 0, 0]  # X axis normal for proper orientation
         )
@@ -465,7 +465,7 @@ class NeckModule(BaseModule):
         ctrl, ctrl_grp = create_control(
             f"{self.module_id}_top_neck_ctrl",
             "circle",
-            4.5,  # Size (smaller than mid-neck)
+            10.0,  # Size (smaller than mid-neck)
             CONTROL_COLORS["main"],  # Yellow
             normal=[1, 0, 0]  # X axis normal for proper orientation
         )

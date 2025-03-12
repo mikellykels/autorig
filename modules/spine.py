@@ -423,7 +423,7 @@ class SpineModule(BaseModule):
         cog_ctrl, cog_grp = create_control(
             f"{self.module_id}_cog_ctrl",
             "square",  # Square shape for COG
-            12.0,  # Larger size
+            20.0,  # Larger size
             CONTROL_COLORS["cog"],  # Orange color
             parent=self.control_grp
         )
@@ -443,7 +443,7 @@ class SpineModule(BaseModule):
         spine_ctrl, spine_grp = create_control(
             f"{self.module_id}_{spine_name}_ctrl",
             "circle",  # Circle shape for spine
-            8.0 - (index * 0.4),  # Gradual size reduction
+            20.0 - (index * 0.4),  # Gradual size reduction
             CONTROL_COLORS["main"],  # Yellow color
             normal=[1, 0, 0]  # X axis normal for proper orientation
         )
@@ -481,7 +481,7 @@ class SpineModule(BaseModule):
         chest_ctrl, chest_grp = create_control(
             f"{self.module_id}_chest_ctrl",
             "circle",  # Circle shape
-            8.0,  # Reduced size (was 16.0)
+            20.0,  # Reduced size (was 16.0)
             CONTROL_COLORS["main"],  # Yellow color
             normal=[1, 0, 0]  # Initial orientation (will be adjusted)
         )

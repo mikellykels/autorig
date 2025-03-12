@@ -458,7 +458,7 @@ class HeadModule(BaseModule):
         ctrl, ctrl_grp = create_control(
             f"{self.module_id}_head_ctrl",
             "circle",
-            7.0,  # Size (larger than neck controls)
+            12.0,  # Size (larger than neck controls)
             CONTROL_COLORS["main"],  # Yellow
             normal=[1, 0, 0]  # X axis normal for proper orientation
         )

@@ -21,7 +21,7 @@ CONTROL_COLORS = {
     "fk": [0.2, 0.8, 0.2],    # Green for FK
     "ik": [0.8, 0.2, 0.8],    # Purple for IK
     "twist": [0.8, 0.4, 0.2], # Orange for twist controls
-    "cog": [1.0, 0.5, 0.0],   # Orange for COG/root
+    "cog": [0.5, 0, 0.5],   # purple
     "offset": [0.5, 0.5, 1.0] # Light blue for offset controls
 }
 
