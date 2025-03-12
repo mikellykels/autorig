@@ -481,6 +481,29 @@ class ModularRigUI(QtWidgets.QDialog):
             cmds.parent(systems_grp, self.manager.rig_grp)
             print(f"Created rig systems group: {systems_grp}")
 
+            # Create a visualizations group for curve visualization elements
+            vis_grp_name = f"{self.manager.character_name}_visualizations"
+            if cmds.objExists(vis_grp_name):
+                cmds.delete(vis_grp_name)
+
+            vis_grp = cmds.group(empty=True, name=vis_grp_name)
+            cmds.parent(vis_grp, systems_grp)
+            print(f"Created visualizations group: {vis_grp}")
+
+            # Find all pole vector visualization curves and parent them to the visualizations group
+            for module in self.manager.modules.values():
+                if isinstance(module, LimbModule) and hasattr(module, 'utility_nodes'):
+                    if 'pole_viz_curve' in module.utility_nodes:
+                        curve = module.utility_nodes['pole_viz_curve']
+                        if cmds.objExists(curve):
+                            cmds.parent(curve, vis_grp)
+                            print(f"Moved pole vector visualization {curve} to {vis_grp}")
+
+            # Hide the guides group
+            if self.manager.guides_grp and cmds.objExists(self.manager.guides_grp):
+                cmds.setAttr(f"{self.manager.guides_grp}.visibility", 0)
+                print("Guide group visibility turned off")
+
             # Find the COG joint
             cog_joint = None
             spine_module = None

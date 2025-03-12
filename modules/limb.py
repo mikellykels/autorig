@@ -247,6 +247,10 @@ class LimbModule(BaseModule):
             print("\n--- STEP 9: FINALIZING CLAVICLE CONNECTION ---")
             self._finalize_clavicle_connection()
 
+        # 10. Create pole vector visualization (NEW STEP)
+        print("\n--- STEP 10: CREATING POLE VECTOR VISUALIZATION ---")
+        self.create_pole_vector_visualization()
+
         print(f"\nBuild complete for {self.module_id}")
 
     def _validate_guides(self):
@@ -1412,6 +1416,9 @@ class LimbModule(BaseModule):
         else:
             x_axis = [1, 0, 0]  # Default if something is wrong
 
+        # Get color based on side
+        color = self._get_color_for_control_type("fk")
+
         # Create the control with proper orientation based on limb type
         if self.limb_type == "leg":
             # For legs, create with Y-up normal first
@@ -1419,7 +1426,7 @@ class LimbModule(BaseModule):
                 f"{self.module_id}_{joint_name}_fk_ctrl",
                 "circle",
                 size,
-                CONTROL_COLORS["fk"],
+                color,
                 normal=[0, 1, 0]  # Y-up for legs
             )
 
@@ -1434,7 +1441,7 @@ class LimbModule(BaseModule):
                 f"{self.module_id}_{joint_name}_fk_ctrl",
                 "circle",
                 size,
-                CONTROL_COLORS["fk"],
+                color,
                 normal=x_axis  # Use joint's X axis for arms
             )
 
@@ -1455,6 +1462,9 @@ class LimbModule(BaseModule):
         """Create IK controls for arm with proper pole vector setup."""
         print(f"Creating IK controls for arm with pole vector setup")
 
+        # Get color based on side
+        color = self._get_color_for_control_type("ik")
+
         # === IK CONTROLS ===
         # Wrist IK control
         wrist_ik_jnt = self.joints["ik_wrist"]
@@ -1462,7 +1472,7 @@ class LimbModule(BaseModule):
             f"{self.module_id}_wrist_ik_ctrl",
             "cube",
             3.5,
-            CONTROL_COLORS["ik"]
+            color
         )
 
         # Position the control at the wrist joint
@@ -1481,7 +1491,7 @@ class LimbModule(BaseModule):
             f"{self.module_id}_pole_ctrl",
             "sphere",
             2.5,
-            CONTROL_COLORS["ik"]
+            color
         )
 
         # 4. Position pole control at elbow initially
@@ -1610,11 +1620,14 @@ class LimbModule(BaseModule):
         ankle_ik_jnt = self.joints["ik_ankle"]
         ankle_ik_pos = cmds.xform(ankle_ik_jnt, query=True, translation=True, worldSpace=True)
 
+        # Get color based on side
+        color = self._get_color_for_control_type("fk")
+
         ankle_ik_ctrl, ankle_ik_grp = create_control(
             f"{self.module_id}_ankle_ik_ctrl",
             "cube",
             3.5,  # Larger size
-            CONTROL_COLORS["ik"]
+            color
         )
 
         # Position the control
@@ -2362,12 +2375,15 @@ class LimbModule(BaseModule):
         """
         print(f"\nCreating pole vector control for {self.module_id} leg")
 
+        # Get color based on side
+        color = self._get_color_for_control_type("fk")
+
         # 1. Create pole vector control
         pole_ctrl, pole_grp = create_control(
             f"{self.module_id}_pole_ctrl",
             "sphere",  # Use sphere for pole vector
             2.5,  # Size
-            CONTROL_COLORS["ik"]
+            color
         )
 
         # 2. Position pole control at knee initially using a temporary constraint
@@ -2449,8 +2465,11 @@ class LimbModule(BaseModule):
         # Freeze transformations
         cmds.makeIdentity(circle, apply=True, translate=True, rotate=True, scale=True)
 
+        # Get color based on side
+        color = self._get_color_for_control_type("fk")
+
         # Apply color
-        set_color_override(circle, CONTROL_COLORS["fk"])
+        set_color_override(circle, color)
 
         # Create control group
         circle_grp = cmds.group(circle, name=f"{circle}_grp")
@@ -2505,3 +2524,74 @@ class LimbModule(BaseModule):
             print(f"Connected {fk_ctrl_grp} to {clavicle_ctrl}")
         except Exception as e:
             print(f"Error connecting clavicle to FK shoulder: {str(e)}")
+
+    def _get_color_for_control_type(self, control_type):
+        """
+        Get the color for a control based on the module's side.
+
+        Args:
+            control_type (str): Type of control ('fk', 'ik', etc.)
+
+        Returns:
+            list: RGB color values
+        """
+        # FK/IK switch always yellow
+        if control_type == "fkik_switch":
+            return [1, 1, 0]  # Yellow
+
+        # Center controls always yellow
+        if self.side == "c":
+            return CONTROL_COLORS.get(control_type, [1, 1, 0])  # Default to yellow
+
+        # Left side: blue
+        if self.side == "l":
+            if control_type in ["fk", "ik", "pole"]:
+                return [0, 0, 1.0]  # Pure blue
+
+        # Right side: red
+        if self.side == "r":
+            if control_type in ["fk", "ik", "pole"]:
+                return [1.0, 0, 0]  # Red for right side
+
+        # Default to original color
+        return CONTROL_COLORS.get(control_type, [1, 1, 0])
+
+    def create_pole_vector_visualization(self):
+        """
+        Create a visual line connecting from mid-joint to pole vector.
+        Useful for visualizing the pole vector direction.
+
+        Returns:
+            str: Name of the created curve
+        """
+        if self.limb_type == "arm" and all(j in self.joints for j in ["elbow", "shoulder"]):
+            mid_joint = self.joints["elbow"]
+        elif self.limb_type == "leg" and all(j in self.joints for j in ["knee", "hip"]):
+            mid_joint = self.joints["knee"]
+        else:
+            return None
+
+        if "pole" not in self.controls:
+            return None
+
+        from autorig.core.utils import create_pole_vector_line
+
+        # Create visualization line with color matching the IK control (now Z-axis blue for left side)
+        curve, clusters = create_pole_vector_line(
+            self.joints["shoulder" if self.limb_type == "arm" else "hip"],
+            mid_joint,
+            self.controls["pole"],
+            color=self._get_color_for_control_type("ik")
+        )
+
+        # Store reference to the curve
+        self.utility_nodes["pole_viz_curve"] = curve
+        self.utility_nodes["pole_viz_clusters"] = clusters
+
+        # Connect curve visibility to IK/FK switch (visible only in IK mode)
+        if "fkik_switch" in self.controls:
+            # Connect visibility to the FK/IK switch attribute - matches IK control visibility
+            cmds.connectAttr(f"{self.controls['fkik_switch']}.FkIkBlend", f"{curve}.visibility", force=True)
+            print(f"Connected pole vector line visibility to FK/IK switch")
+
+        return curve

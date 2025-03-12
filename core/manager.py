@@ -426,6 +426,8 @@ class ModuleManager:
         """
         Set up constraints for a mirrored module with additional debugging.
         """
+        from autorig.modules.limb import LimbModule
+
         print(f"\nSetting up constraints for mirrored module: {target_module.module_id}")
 
         # Fix FK/IK blending
@@ -535,6 +537,17 @@ class ModuleManager:
                         cmds.connectAttr(f"{target_module.controls['fkik_switch']}.FkIkBlend",
                                          f"{ctrl}.visibility", force=True)
                         print(f"Connected {target_module.controls['fkik_switch']}.FkIkBlend -> {ctrl}.visibility")
+
+        # Create pole vector visualization for the mirrored module
+        if hasattr(target_module, 'create_pole_vector_visualization'):
+            print(f"Creating pole vector visualization for mirrored module: {target_module.module_id}")
+            pole_viz_curve = target_module.create_pole_vector_visualization()
+
+            # Ensure visibility is connected to FK/IK switch
+            if pole_viz_curve and "fkik_switch" in target_module.controls:
+                cmds.connectAttr(f"{target_module.controls['fkik_switch']}.FkIkBlend",
+                                 f"{pole_viz_curve}.visibility", force=True)
+                print(f"Connected mirrored pole vector line visibility to FK/IK switch")
 
         print(f"Constraint setup complete for mirrored module: {target_module.module_id}")
 
